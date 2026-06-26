@@ -12,3 +12,7 @@ profile.svg
 
 # Time trace
 trace.json
+
+# Files/Directories not required for updates.
+.vscode/
+wally.lock
