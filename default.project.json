@@ -1,0 +1,9 @@
+{
+  "name": "Frigate",
+  "tree": {
+    "$path": "src",
+    "Packages": {
+      "$path": "Packages"
+    }
+  }
+}

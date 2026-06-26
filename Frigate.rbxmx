@@ -1,0 +1,6561 @@
+<roblox version="4">
+  <Item class="Folder" referent="0">
+    <Properties>
+      <string name="Name">Frigate</string>
+    </Properties>
+    <Item class="ModuleScript" referent="1">
+      <Properties>
+        <string name="Name">FrigateSrc</string>
+        <string name="Source"><![CDATA[--[[
+	Frigate, Network Processing Library. (Licensed under Apache-2.0)
+	Developed by @TheTerrierKnight
+
+	You should place the package folder in a replicated container that both the client/server can access. ReplicatedStorage is the recommended place for Frigate.
+]]
+
+local Root = script
+local FrigatePackages = Root.FrigatePackages
+
+-- Return the library methods/packages.
+return {
+	Net = require(FrigatePackages.Net),
+	WebAPIs = {
+		Technified = require(FrigatePackages.WebAPI.TechnifiedAPI),
+		NeoShift = require(FrigatePackages.WebAPI.NeoShiftAPI),
+	},
+}
+]]></string>
+      </Properties>
+      <Item class="Folder" referent="2">
+        <Properties>
+          <string name="Name">FrigatePackages</string>
+        </Properties>
+        <Item class="ModuleScript" referent="3">
+          <Properties>
+            <string name="Name">Net</string>
+            <string name="Source"><![CDATA[--[[
+	General purpose networking implementation alongside additional gadgets/utils.
+]]
+
+local net = {}
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Root = script.Parent.Parent
+local Packages = Root.Parent.Packages
+local InternalPackages = Root._Internal
+
+local InternalFlags = require(InternalPackages.InternalFlags)
+local Logger = require(Root.Utilites.Logger)
+local Promise = require(Packages.promise)
+
+local _NETWORK_FOLDER = ReplicatedStorage:WaitForChild("_FRIGATE_NET", 2) or nil
+local _LOGGER_PREFIX = "NET"
+
+if _NETWORK_FOLDER == nil and RunService:IsServer() then
+	local Folder = Instance.new("Folder")
+	Folder.Name = "_FRIGATE_NET"
+	Folder.Parent = ReplicatedStorage
+	_NETWORK_FOLDER = Folder
+end
+
+--[[
+	Creates a Network Unit to store network objects under. This method is server-only.
+	This method yields and returns a non-cancelable promise that will contain either the object (if sucessful) or an error code (if failed).
+]]
+function net.CreateNetworkUnitAsync(UnitName: string)
+	return Promise.new(function(resolve, reject)
+		if not RunService:IsServer() then
+			reject("CreateNetworkUnitAsync must be called by the server.")
+		end
+
+		if _NETWORK_FOLDER:FindFirstChild(UnitName) ~= nil then
+			reject("The provided name is reserved.")
+			Logger.LogToConsole({
+				prefix = _LOGGER_PREFIX,
+				message = UnitName .. " Is reserved and cannot be created due to conflict.",
+				mode = Enum.MessageType.MessageWarning,
+			})
+		end
+
+		local Unit = Instance.new("Folder")
+		Unit.Parent = _NETWORK_FOLDER
+		Unit.Name = UnitName
+
+		resolve(Unit)
+	end)
+end
+
+--[[
+	Returns the NetworkUnit with the associated name.
+	This method yields and returns a non-cancelable promise that will contain either the object (if sucessful) or an error code (if failed).
+]]
+function net.GetNetworkUnitAsync(UnitName: string)
+	return Promise.new(function(resolve, reject)
+		if _NETWORK_FOLDER:FindFirstChild(UnitName) == nil then
+			reject("The Unit provided does not exist.")
+		else
+			resolve(_NETWORK_FOLDER[UnitName])
+		end
+	end)
+end
+
+--[[
+	Creates a RemoteEvent under the provided NetworkUnit. This method is server-only.
+]]
+function net.CreateRemote(NetworkUnit: string, RemoteName: string)
+	if not RunService:IsServer() then
+		Logger.LogToConsole({
+			prefix = _LOGGER_PREFIX,
+			message = "CreateRemote must be called by the server.",
+			mode = Enum.MessageType.MessageError,
+		})
+		return
+	end
+
+	local Success, Result = net.GetNetworkUnitAsync(NetworkUnit):await()
+
+	if Success then
+		local Remote
+
+		if InternalFlags["FF_SetUnreliableBehavior"] and InternalFlags["FF_SetUnreliableBehavior"].state == true then
+			Remote = Instance.new("UnreliableRemoteEvent")
+		else
+			Remote = Instance.new("RemoteEvent")
+		end
+
+		if InternalFlags["FF_ForceNameOverride"] and InternalFlags["FF_ForceNameOverride"].state then
+			Remote.Name = InternalFlags["FF_ForceNameOverride"].state
+		else
+			Remote.Name = RemoteName
+		end
+
+		Remote:SetAttribute("_FRIGATE_GEN", 1)
+		Remote.Parent = Result
+	else
+		Logger.LogToConsole({
+			prefix = _LOGGER_PREFIX,
+			message = "An error while getting NetworkUnit " .. NetworkUnit .. " occured: " .. Result,
+			mode = Enum.MessageType.MessageError,
+		})
+		return
+	end
+end
+
+--[[
+	Returns the Remote with the associated name.
+	This method yields and returns a non-cancelable promise that will contain either the object (if sucessful) or an error code (if failed).
+]]
+function net.GetRemoteAsync(UnitName: string, RemoteName: string)
+	return Promise.new(function(resolve, reject)
+		if _NETWORK_FOLDER:FindFirstChild(UnitName) == nil then
+			reject("The Unit provided does not exist.")
+		else
+			if _NETWORK_FOLDER[UnitName]:FindFirstChild(RemoteName) then
+				if
+					_NETWORK_FOLDER[UnitName][RemoteName]:IsA("RemoteEvent")
+					or _NETWORK_FOLDER[UnitName][RemoteName]:IsA("UnreliableRemoteEvent")
+				then
+					resolve(_NETWORK_FOLDER[UnitName][RemoteName])
+				else
+					reject("The requested object is not a Remote.")
+				end
+			else
+				reject("The Remote provided does not exist.")
+			end
+		end
+	end)
+end
+
+--[[
+	Creates a RemoteFunction under the provided NetworkUnit. This method is server-only.
+]]
+function net.CreateFunction(NetworkUnit: string, FunctionName: string)
+	if not RunService:IsServer() then
+		Logger.LogToConsole({
+			prefix = _LOGGER_PREFIX,
+			message = "CreateFunction must be called by the server.",
+			mode = Enum.MessageType.MessageError,
+		})
+		return
+	end
+
+	local Success, Result = net.GetNetworkUnitAsync(NetworkUnit):await()
+
+	if Success then
+		local Function = Instance.new("RemoteFunction")
+
+		Function.Name = FunctionName
+		Function:SetAttribute("_FRIGATE_GEN", 1)
+		Function.Parent = Result
+	else
+		Logger.LogToConsole({
+			prefix = _LOGGER_PREFIX,
+			message = "An error while getting NetworkUnit " .. NetworkUnit .. " occured: " .. Result,
+			mode = Enum.MessageType.MessageError,
+		})
+		return
+	end
+end
+
+--[[
+	Returns the Function with the associated name.
+	This method yields and returns a non-cancelable promise that will contain either the object (if sucessful) or an error code (if failed).
+]]
+function net.GetFunctionAsync(UnitName: string, FunctionName: string)
+	return Promise.new(function(resolve, reject)
+		if _NETWORK_FOLDER:FindFirstChild(UnitName) == nil then
+			reject("The Unit provided does not exist.")
+		else
+			if _NETWORK_FOLDER[UnitName]:FindFirstChild(FunctionName) then
+				if _NETWORK_FOLDER[UnitName][FunctionName]:IsA("RemoteFunction") then
+					resolve(_NETWORK_FOLDER[UnitName][FunctionName])
+				else
+					reject("The requested object is not a Function.")
+				end
+			else
+				reject("The Remote provided does not exist.")
+			end
+		end
+	end)
+end
+
+--[[
+	Binds the provided function to a RemoteEvent/UnreliableRemoteEvent/RemoteFunction. This method is server-only.
+	This method yields and returns a non-cancelable promise that will contain an empty string (if sucessful) or an error code (if failed).
+]]
+function net.BindCallAsync(RemoteObject: RemoteFunction | RemoteEvent | UnreliableRemoteEvent, func: (...any) -> ())
+	return Promise.new(function(resolve, reject)
+		if not RunService:IsServer() then
+			reject("BindCallAsync must be called by the server.")
+		end
+
+		if RemoteObject:GetAttribute("_FRIGATE_GEN") == nil then
+			reject("RemoteObject was not created by Frigate and cannot be safely binded to.")
+		end
+
+		if RemoteObject:IsA("RemoteEvent") or RemoteObject:IsA("UnreliableRemoteEvent") then
+			RemoteObject.OnServerEvent:Connect(func)
+		elseif RemoteObject:IsA("RemoteFunction") then
+			RemoteObject.OnServerInvoke = func
+		else
+			reject("RemoteObject is invalid.")
+		end
+		resolve("")
+	end)
+end
+
+--[[
+	Binds the provided function soo that will be called if the associated RemoteEvent/UnreliableRemoteEvent/RemoteFunction is invoked by the server. This method is client-only.
+	This method yields and returns a non-cancelable promise that will contain an empty string (if sucessful) or an error code (if failed).
+]]
+function net.BindReceiveAsync(RemoteObject: RemoteFunction | RemoteEvent | UnreliableRemoteEvent, func: (...any) -> ())
+	return Promise.new(function(resolve, reject)
+		if not RunService:IsClient() then
+			reject("BindReceiveAsync must be called by the client.")
+		end
+
+		if RemoteObject:GetAttribute("_FRIGATE_GEN") == nil then
+			reject("RemoteObject was not created by Frigate and cannot be safely binded to.")
+		end
+
+		if RemoteObject:IsA("RemoteEvent") or RemoteObject:IsA("UnreliableRemoteEvent") then
+			RemoteObject.OnClientEvent:Connect(func)
+		elseif RemoteObject:IsA("RemoteFunction") then
+			RemoteObject.OnClientInvoke = func
+		else
+			reject("RemoteObject is invalid.")
+		end
+		resolve("")
+	end)
+end
+
+return net
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="Folder" referent="4">
+          <Properties>
+            <string name="Name">WebAPI</string>
+          </Properties>
+          <Item class="ModuleScript" referent="5">
+            <Properties>
+              <string name="Name">NeoShiftAPI</string>
+              <string name="Source"><![CDATA[--[[
+	API to interact with NeoShift Services.
+
+	Due to NeoShift being a private platform with strict data ingress, many methods will require you to have a local "cookie" or a scoped API key.
+	Most methods are also read-only.
+]]
+
+local NeoShift = {
+	Volatile = {},
+	Platform = {},
+	Roblox = {},
+	Guild = {},
+}
+
+--[[
+	API Catagories, based off on public/private docs.
+
+    Volatile is reserved for experimental/private/unknown API's.
+]]
+local NVolatile = NeoShift.Volatile
+local NPlatform = NeoShift.Platform
+local NGuild = NeoShift.Guild
+
+local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+
+local Root = script.Parent.Parent.Parent
+local InternalPackages = Root._Internal
+
+local JsonHttpClient = require(InternalPackages.Network.JsonHttpClient)
+
+local ApiUrls = {
+	Auth = "https://neo-shift.xyz/auth",
+	General = "https://neo-shift.xyz/api",
+	PlatformAdmin = "https://neo-shift.xyz/api/admin",
+	Guild = "https://neo-shift.xyz/api/guilds",
+}
+
+--[[
+    Type for NeoShiftAuthResponse
+]]
+export type NeoShiftAuthGuilds = {
+	id: string,
+	name: string,
+	icon: string,
+	owner: boolean,
+	hasWorkspace: boolean,
+}
+
+--[[
+    Type for NeoShiftAuthResponse
+]]
+export type NeoShiftAuthUser = {
+	id: string,
+	username: string,
+	avatar: string,
+	discriminator: string,
+}
+
+--[[
+   User authorization object, represents a active user session.
+]]
+export type NeoShiftAuthResponse = {
+	error: string?,
+	user: NeoShiftAuthUser?,
+	guilds: { NeoShiftAuthGuilds }?,
+}
+
+--[[
+   Guild authorization object, represents a active user session within a certain guild.
+]]
+export type NeoShiftGuildAuthResponse = {
+	error: string?,
+	verified: boolean,
+	robloxId: string,
+	robloxUsername: string,
+	method: string,
+}
+
+--[[
+   More generalized response object that allows for error handling while respecting different response structures.
+]]
+export type NeoShiftResponse = {
+	error: string?,
+} & { [any]: any }
+
+--[[
+	Fetches your current authentication session and returns data about you and your guilds. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table ("user". may contain the following fields: "id", "username", "avatar", "discriminator", these fields contain strings),
+    table ("guilds". Contains tables that may contain the following fields: "id", "name", "icon", "owner", "hasWorkspace", these fields contain strings or booleans)
+]]
+function NVolatile.V1_Me(local_auth: Secret)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.Auth .. "/me", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: NeoShiftAuthResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body.user, Body.guilds
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Fetches the current public platform configuration. This method is server only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NPlatform.V1_GetPublicPlatform()
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.General .. "/platform/public", "GET", nil, {}):await()
+
+	if Success then
+		local Body: NeoShiftResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Fetches the current internal platform configuration. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NPlatform.V1_GetAdminInternalPlatformConfiguration(local_auth: Secret)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.PlatformAdmin .. "/platform", "GET", local_auth, {}):await()
+
+	if Success then
+		local Body: NeoShiftResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Checks if your session is a platform admin session. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, boolean ("isAdmin")
+]]
+function NPlatform.V1_CheckAdmin(local_auth: Secret)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.PlatformAdmin .. "/check", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: NeoShiftResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body["isAdmin"]
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns all changelog patch objects that are set as private. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NPlatform.V1_GetAdminPatchObjects(local_auth: Secret)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.PlatformAdmin .. "/private-changelog", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: NeoShiftResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns global statistics about NeoShift. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NPlatform.V1_GetGlobalStats(local_auth: Secret)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.PlatformAdmin .. "/stats", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: NeoShiftResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns all active Guilds in Neoshift. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NPlatform.V1_GetGuilds(local_auth: Secret)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.PlatformAdmin .. "/guilds", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: NeoShiftResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns all active Blacklists in Neoshift. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NPlatform.V1_GetBlacklists(local_auth: Secret)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.PlatformAdmin .. "/blacklist", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: NeoShiftResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns recent activity logs in Neoshift. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NPlatform.V1_GetActivityTelemetry(local_auth: Secret)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.PlatformAdmin .. "/recent-activity", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: NeoShiftResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns private-approved guilds in Neoshift. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NPlatform.V1_GetApprovedGuilds(local_auth: Secret)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.PlatformAdmin .. "/approved-guilds", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: NeoShiftResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns all global badges in Neoshift. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NPlatform.V1_GetBadges(local_auth: Secret)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.PlatformAdmin .. "/neo-badges", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: NeoShiftResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns the layout configuration of a Guild. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NGuild.V1_GetLayout(local_auth: Secret, guild_id: string)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.Guild .. guild_id .. "/overview-layout", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: NeoShiftResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns the authorization object for the local user within a Guild. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain the following fields: "verified", "robloxId", "robloxUsername", "method", these fields contain strings or booleans)
+]]
+function NVolatile.V1_GuildAuth(local_auth: Secret, guild_id: string)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.Auth .. "/roblox/status?guildId=" .. guild_id, "GET", nil, Headers)
+			:await()
+
+	if Success then
+		local Body: NeoShiftGuildAuthResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns the configuration object for a Guild. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NGuild.V1_GuildInfomation(local_auth: Secret, guild_id: string)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.Guild .. "/" .. guild_id, "GET", nil, Headers):await()
+
+	if Success then
+		local Body: NeoShiftGuildAuthResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns the configuration object for a Guild's ranks. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NGuild.V1_GuildRanks(local_auth: Secret, guild_id: string)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.Guild .. "/" .. guild_id .. "/ranks", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: NeoShiftGuildAuthResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns the configuration object for the local user in a Guild. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NGuild.V1_GuildStaff(local_auth: Secret, guild_id: string)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.Guild .. "/" .. guild_id .. "/staff/me", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: NeoShiftGuildAuthResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns all shifts from a Guild. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NGuild.V1_GuildShifts(local_auth: Secret, guild_id: string, active_only: boolean)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? = JsonHttpClient.SendRequestAsync(
+		ApiUrls.Guild .. "/" .. guild_id .. "/shifts?live=" .. tostring(active_only),
+		"GET",
+		nil,
+		Headers
+	):await()
+
+	if Success then
+		local Body: NeoShiftGuildAuthResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns all modlogs from a Guild. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NGuild.V1_GuildModlogs(local_auth: Secret, guild_id: string)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.Guild .. "/" .. guild_id .. "/modlogs", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: NeoShiftGuildAuthResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns staff quota data from a Guild. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NGuild.V1_StaffQuota(local_auth: Secret, guild_id: string)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.Guild .. "/" .. guild_id .. "/quota", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: NeoShiftGuildAuthResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns audit data from a Guild. This method is server only.
+    For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function NGuild.V1_GuildAudit(local_auth: Secret, guild_id: string, page: number)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.Guild .. "/" .. guild_id .. "/audit?page=" .. page, "GET", nil, Headers)
+			:await()
+
+	if Success then
+		local Body: NeoShiftGuildAuthResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.error == nil then
+			return true, Body
+		else
+			return false, Body.error
+		end
+	else
+		return false, Response
+	end
+end
+
+return NeoShift
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="6">
+            <Properties>
+              <string name="Name">TechnifiedAPI</string>
+              <string name="Source"><![CDATA[--[[
+	API to interact with Technified Services.
+]]
+
+local Technified = {
+	Lookups = {},
+	Bindings = {},
+	Shield = {},
+	Moderation = {},
+	ServerManagement = {},
+	Local_Plugin = {},
+	Local_Identity = {},
+}
+
+--[[
+	API Catagories, based off on the Technifed Docs.
+]]
+local TLookups = Technified["Lookups"]
+local TBindings = Technified["Bindings"]
+local TShield = Technified["Shield"]
+local TModeration = Technified["Moderation"]
+local TServerManagement = Technified["ServerManagement"]
+local TLocalPlugin = Technified["Local_Plugin"]
+local TLocalIdentity = Technified["Local_Identity"]
+
+local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+
+local Root = script.Parent.Parent.Parent
+local InternalPackages = Root._Internal
+
+local JsonHttpClient = require(InternalPackages.Network.JsonHttpClient)
+
+local ApiUrls = {
+	V1 = "https://api.technified.xyz/api/v1",
+}
+
+--[[
+	Represents a standard response structure from Technified.
+]]
+export type TechnifiedResponse = {
+	status: string,
+	code: number,
+	message: string?,
+	data: any?,
+}
+
+--[[
+	Data object for Binding related API's.
+	Not every argument is required for a sucessful call and some can be omitted entirely for certain endpoints.
+]]
+export type Binding = {
+	roblox_group_id: number?,
+	discord_role_id: number?,
+	discord_role_name: number?,
+	roblox_gamepass_id: number?,
+	roblox_asset_id: number?,
+	roblox_badge_id: number?,
+	min_rank: number?,
+	max_rank: number?,
+	guild_id: string?,
+	priority: number?,
+	account_age_min_days: number,
+	id: number?,
+	type: string,
+	group_id: number?,
+	role_id: string?,
+	discord_id: string?,
+	binding_id: number?,
+}
+
+--[[
+	Data object for Moderation related API's.
+	Not every argument is required for a sucessful call and some can be omitted entirely for certain endpoints.
+]]
+export type PunishmentData = {
+	guild_id: string?,
+	roblox_id: string?,
+	is_global: boolean?,
+	reason: string?,
+	duration: number?,
+	moderator_username: string?,
+	moderator_roblox_id: number?,
+	source_server_id: string?,
+}
+
+--[[
+	Child object for Moderation related API's.
+	Not every argument is required for a sucessful call and some can be omitted entirely for certain endpoints.
+]]
+export type ServerCommandPlayer = {
+	robloxId: string?,
+	username: string?,
+	displayName: string?,
+	joinTime: number?,
+	team: string?,
+}
+
+--[[
+	Data object for Server Manager related API's.
+	Not every argument is required for a sucessful call and some can be omitted entirely for certain endpoints.
+]]
+export type ServerCommand = {
+	guildId: string?,
+	serverId: string?,
+	placeId: string?,
+	universeId: string?,
+	gameName: string?,
+	playerCount: number?,
+	maxPlayers: number?,
+	serverAge: number?,
+	fps: number?,
+	commandId: number?,
+	success: boolean?,
+	result: string?,
+	error: string?,
+	players: { ServerCommandPlayer },
+}
+
+--[[
+	Data object for Plugin related API's.
+	Not every argument is required for a sucessful call and some can be omitted entirely for certain endpoints.
+]]
+export type PluginSerialObject = {
+	guildId: string?,
+	placeId: string?,
+	universeId: string?,
+	gameName: string?,
+	creatorId: string?,
+} & { [string]: any }
+
+--[[
+	Looks up a discord/roblox user within a guild. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, string (discord_id), number (roblox_id), string (roblox_username), boolean (verified)
+]]
+function TLookups.V1_LookupUser(authorization: Secret | string, roblox_or_discord_id: string, guild_id: string)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["X-Guild-ID"] = guild_id,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? = JsonHttpClient.SendRequestAsync(
+		ApiUrls.V1 .. "/lookup/discord/" .. roblox_or_discord_id,
+		"GET",
+		authorization,
+		Headers
+	):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true,
+				Body.data["discord_id"],
+				Body.data["roblox_id"],
+				Body.data["roblox_username"],
+				Body.data["verified"]
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Looks up a batch of discord/roblox user within a guild that will contain a maximum of 25 users. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table ("results", may contain string-key tables that contain the following fields: "discord_id", "roblox_id" "roblox_username", "verified", these fields contain strings or booleans)
+]]
+function TLookups.V1_Batch(
+	authorization: Secret | string,
+	guild_id: string,
+	roblox_ids: { string },
+	discord_ids: { string }
+)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? = JsonHttpClient.SendRequestAsync(
+		ApiUrls.V1 .. "/lookup/status",
+		"POST",
+		authorization,
+		{},
+		{
+			["guild_id"] = guild_id,
+			["discord_ids"] = discord_ids or {},
+			["roblox_ids"] = roblox_ids or {},
+		}
+	):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.data["results"]
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Returns all registered bindings. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (can contain Binding Type objects with/without omitted values)
+]]
+function TBindings.V1_GetBindings(authorization: Secret | string, guild_id: string)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["X-Guild-ID"] = guild_id,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.V1 .. "/bindings/list", "GET", authorization, Headers):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.data
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Registers a Binding. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, string (message)
+]]
+function TBindings.V1_CreateBind(authorization: Secret | string, bind_data: Binding)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.V1 .. "/bindings/add", "POST", authorization, {}, bind_data):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.data
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Updates a Binding. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, string (message)
+]]
+function TBindings.V1_UpdateBind(authorization: Secret | string, bind_data: Binding)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.V1 .. "/bindings/update", "PATCH", authorization, {}, bind_data):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.data
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Deletes a Binding. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, string (message)
+]]
+function TBindings.V1_DeleteBind(authorization: Secret | string, bind_id: number)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.V1 .. "/bindings/remove/" .. bind_id, "DELETE", authorization):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.data
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Dry-Tests a Binding. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, boolean (matches), string (reason)
+]]
+function TBindings.V1_TestBind(authorization: Secret | string, bind_data: Binding)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.V1 .. "/bindings/test", "POST", authorization, {}, bind_data):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.data["matches"], Body.data["reason"]
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Checks if a Bind is valid. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, string (message)
+]]
+function TBindings.V1_ValidateBind(authorization: Secret | string, bind_data: Binding)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.V1 .. "/bindings/validate", "POST", authorization, {}, bind_data)
+			:await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.message
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Checks if a user is flagged within Technified Shield. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, boolean (flagged), table ("flag", may contain the following fields: "roblox_id", "roblox_username", "reason", "flagged_by", "source", "catagory", "flagged_at", these fields contain strings or numbers)
+]]
+function TShield.V1_Check(authorization: Secret | string, roblox_id: number)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.V1 .. "/shield/check/" .. roblox_id, "GET", authorization):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.data["flagged"], Body.data["flag"] or {}
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Bulk checks multiple users and returns all flagged users. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table ("flagged", may contain string-key tables that have the following fields: "roblox_id", "roblox_username", "reason", "source", "catagory", these fields contain strings or numbers)
+]]
+function TShield.V1_Bulk(authorization: Secret | string, roblox_ids: { number })
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.V1 .. "/shield/batch", "POST", authorization, {}, roblox_ids):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.data["flagged"]
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Gets all active mutes. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON), number (total)
+]]
+function TModeration.V1_GetMutes(authorization: Secret | string, guild_id: number)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? = JsonHttpClient.SendRequestAsync(
+		ApiUrls.V1 .. "/moderation/" .. guild_id .. "/roblox/mutes/active",
+		"GET",
+		authorization
+	):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.data["mutes"], Body.data["total"]
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Gets all active bans. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON), number (total)
+]]
+function TModeration.V1_GetBans(authorization: Secret | string, guild_id: number)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? = JsonHttpClient.SendRequestAsync(
+		ApiUrls.V1 .. "/moderation/" .. guild_id .. "/roblox/bans/active",
+		"GET",
+		authorization
+	):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.data["bans"], Body.data["total"]
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Creates a ban within a guild. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, string (message)
+]]
+function TModeration.V1_CreateBan(authorization: Secret | string, ban_data: PunishmentData)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? = JsonHttpClient.SendRequestAsync(
+		ApiUrls.V1 .. "/moderation/" .. ban_data.guild_id or "FRIGATE_GUILD_ID_DEFAULTPLACEHOLDER" .. "/roblox/ban",
+		"POST",
+		authorization,
+		{},
+		ban_data
+	):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.message
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Removes a ban within a guild. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, string (message)
+]]
+function TModeration.V1_RemoveBan(authorization: Secret | string, ban_data: PunishmentData)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? = JsonHttpClient.SendRequestAsync(
+		ApiUrls.V1 .. "/moderation/" .. ban_data.guild_id or "FRIGATE_GUILD_ID_DEFAULTPLACEHOLDER" .. "/roblox/unban",
+		"POST",
+		authorization,
+		{},
+		ban_data
+	):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.message
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Creates a mute within a guild. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, string (message)
+]]
+function TModeration.V1_CreateMute(authorization: Secret | string, mute_data: PunishmentData)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? = JsonHttpClient.SendRequestAsync(
+		ApiUrls.V1 .. "/moderation/" .. mute_data.guild_id or "FRIGATE_GUILD_ID_DEFAULTPLACEHOLDER" .. "/roblox/mute",
+		"POST",
+		authorization,
+		{},
+		mute_data
+	):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.message
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Removes a mute within a guild. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, string (message)
+]]
+function TModeration.V1_RemoveMute(authorization: Secret | string, mute_data: PunishmentData)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? = JsonHttpClient.SendRequestAsync(
+		ApiUrls.V1 .. "/moderation/" .. mute_data.guild_id or "FRIGATE_GUILD_ID_DEFAULTPLACEHOLDER" .. "/roblox/unmute",
+		"POST",
+		authorization,
+		{},
+		mute_data
+	):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.message
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Sends a server heartbeat. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, string (message)
+]]
+function TServerManagement.V1_Heartbeat(authorization: Secret | string, command_data: ServerCommand)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? = JsonHttpClient.SendRequestAsync(
+		ApiUrls.V1 .. "/roblox/servers/heartbeat",
+		"POST",
+		authorization,
+		{},
+		command_data
+	):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.message
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Polls for Issued Commands. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table ("commands", may contain string-key tables that contain the following fields: "id", "type" "targetRobloxId", "targetUsername", "parameters", "issuedByDiscordId", "issuedByUsername", these fields contain strings, booleans or variadic tables)
+]]
+function TServerManagement.V1_PollCommands(authorization: Secret | string, command_data: ServerCommand)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? = JsonHttpClient.SendRequestAsync(
+		ApiUrls.V1 .. "/roblox/servers/" .. command_data.serverId or "NA" .. "/commands",
+		"GET",
+		authorization
+	):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.data["commands"]
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Marks a command as acknowleged. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, string (message)
+]]
+function TServerManagement.V1_CommitCommand(authorization: Secret | string, command_data: ServerCommand)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? = JsonHttpClient.SendRequestAsync(
+		ApiUrls.V1 .. "/roblox/servers/" .. command_data.serverId
+			or "NA" .. "/commands" .. command_data.commandId
+			or -1 .. "/ack",
+		"POST",
+		authorization
+	):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.message
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Registers a game with Technified. This method is server-only.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, string (message)
+]]
+function TLocalPlugin.V1_Register(authorization: Secret | string, plugin_data: PluginSerialObject)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Success, Response: JsonHttpClient.HttpResponse? = JsonHttpClient.SendRequestAsync(
+		ApiUrls.V1 .. "/roblox/games/register",
+		"POST",
+		authorization,
+		{},
+		JsonHttpClient.AttachJSONMetadata(plugin_data)
+	):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.message
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Checks if the associated local user is blacklisted. This method is server-only.
+	For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, boolean (blacklisted)
+]]
+function TLocalIdentity.V1_IsBlacklisted(local_auth: Secret)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.V1 .. "/user/blacklist-status", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.data["blacklisted"]
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Fetches all platform announcements. This method is server-only.
+	For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function TLocalIdentity.V1_PlatformAnnouncements(local_auth: Secret)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.V1 .. "/announcements", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.data
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+--[[
+	Fetches your current authentication session and returns data about you. This method is server-only.
+	For security, this method only allows Secret objects to be provided for authorization.
+    This method will contain a status boolean as the first argument with all following arguments relating to the response.
+
+    If failed: false, string (error code)
+    If successful: true, table (may contain any valid JSON)
+]]
+function TLocalIdentity.V1_Me(local_auth: Secret)
+	if not RunService:IsServer() then
+		return false, "This method is server only."
+	end
+
+	local Headers = {
+		["Cookie"] = local_auth,
+	}
+
+	local Success, Response: JsonHttpClient.HttpResponse? =
+		JsonHttpClient.SendRequestAsync(ApiUrls.Auth .. "/auth/me", "GET", nil, Headers):await()
+
+	if Success then
+		local Body: TechnifiedResponse = HttpService:JSONDecode(Response.Body)
+
+		if Body.status == "success" then
+			return true, Body.data
+		else
+			return false, Body.message
+		end
+	else
+		return false, Response
+	end
+end
+
+return Technified
+]]></string>
+            </Properties>
+          </Item>
+        </Item>
+      </Item>
+      <Item class="ModuleScript" referent="7">
+        <Properties>
+          <string name="Name">LICENSE</string>
+          <string name="Source"><![CDATA[--[[
+
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   Copyright 2026 TheTerrierKnight
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+]]
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="Folder" referent="8">
+        <Properties>
+          <string name="Name">Utilites</string>
+        </Properties>
+        <Item class="ModuleScript" referent="9">
+          <Properties>
+            <string name="Name">Logger</string>
+            <string name="Source"><![CDATA[local logger = {}
+
+local LogService = game:GetService("LogService")
+
+export type LoggerData = {
+	prefix: string,
+	message: string,
+	mode: Enum.MessageType,
+}
+
+function logger.LogToConsole(log: LoggerData): ()
+	local formatted_message = `[FRIGATE][{log.prefix:upper()}]: {log.message}`
+	LogService:Log(log.mode, formatted_message)
+end
+
+return logger
+]]></string>
+          </Properties>
+        </Item>
+      </Item>
+      <Item class="Folder" referent="10">
+        <Properties>
+          <string name="Name">_Internal</string>
+        </Properties>
+        <Item class="ModuleScript" referent="11">
+          <Properties>
+            <string name="Name">InternalFlags</string>
+            <string name="Source"><![CDATA[--[[
+    Used to configure package/experimental behavior.
+	The functionality of this module is reserved for internal use.
+]]
+
+local InternalTypes = script.Parent.InternalTypes
+
+local flags: { [string]: InternalTypes.LxAttribute } = {
+	["FF_SetUnreliableBehavior"] = {
+		scope = "NET",
+		state = false,
+	},
+	["FF_ForceNameOverride"] = {
+		scope = "NET",
+		state = nil,
+	},
+}
+
+return flags
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="12">
+          <Properties>
+            <string name="Name">InternalTypes</string>
+            <string name="Source"><![CDATA[--[[
+	Special Internal types.
+	The functionality of this module is reserved for internal use.
+]]
+
+--[[
+	Acts as a feature flag with a optional scope.
+]]
+export type LxAttribute = {
+	scope: string?,
+	state: any,
+}
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="Folder" referent="13">
+          <Properties>
+            <string name="Name">Network</string>
+          </Properties>
+          <Item class="ModuleScript" referent="14">
+            <Properties>
+              <string name="Name">JsonHttpClient</string>
+              <string name="Source"><![CDATA[--[[
+    Handles sending Json Web Requests safely.
+	The functionality of this module is reserved for internal use.
+]]
+
+local HttpClient = {}
+
+local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+
+local Root = script.Parent.Parent.Parent
+local Packages = Root.Parent.Packages
+
+local Logger = require(Root.Utilites.Logger)
+local promise = require(Packages.promise)
+
+local VERSION = "VersonMicro/2.1"
+
+export type HttpResponse = {
+	Success: boolean,
+	StatusCode: number,
+	StatusMessage: string,
+	Headers: { [string]: any },
+	Body: any,
+}
+
+--[[
+    Checks if HttpService is enabled or not.
+]]
+local function CheckHttpAvailability()
+	return HttpService.HttpEnabled
+end
+
+--[[
+    Send a remote http request to the specified server. This method is server-only.
+    This method yields and returns a non-cancelable promise that will contain either the http response (if sucessful) or an error code (if failed).
+]]
+function HttpClient.SendRequestAsync(
+	url: string,
+	request_type: string,
+	authorization: Secret | string | nil,
+	extra_headers: { [string]: any },
+	json: any
+)
+	return promise.new(function(reslove, reject)
+		if not RunService:IsServer() then
+			reject("SendRequestAsync must be called by the server.")
+		end
+
+		local Res: HttpResponse?
+		local Headers = {
+			["Content-Type"] = "application/json",
+			["X-FrigateJsonHttp"] = VERSION,
+			["X-Identifier"] = "Frigate OSS Network Processing Library",
+			["X-RbxServerStatus"] = if not RunService:IsStudio()
+				then "PRODUCTION_" .. tostring(game.GameId)
+				else "STUDIO/UNKNOWN",
+		}
+
+		if authorization ~= nil then
+			Headers["Authorization"] = "Bearer " .. authorization
+		end
+		if extra_headers ~= nil then
+			for header_name, header_value in extra_headers do
+				Headers[header_name] = header_value
+			end
+		end
+
+		if not CheckHttpAvailability() then
+			reject("Http is not enabled.")
+			Logger.LogToConsole({
+				prefix = "JSON_HTTP",
+				message = "Http is not enabled and JsonHttpClient cannot make requests. Enable http under your game settings.",
+				mode = Enum.MessageType.MessageError,
+			})
+		end
+
+		local http_ok, http_result = pcall(function()
+			Res = HttpService:RequestAsync({
+				["Url"] = url,
+				["Headers"] = Headers,
+				["Method"] = request_type:upper(),
+				["Body"] = if json then HttpService:JSONEncode(json) else nil,
+			})
+		end)
+
+		if http_ok then
+			reslove(Res)
+		else
+			reject(http_result)
+			Logger.LogToConsole({
+				prefix = "JSON_HTTP",
+				message = "JsonHttpClient error: " .. http_result,
+				mode = Enum.MessageType.MessageError,
+			})
+		end
+	end)
+end
+
+--[[
+    Attaches a "Metadata" object to identify the JsonHttpClient.
+	Mainly used for the Technified Plugin API but can be used for virtually any purpose needing to identiify JSON from the JsonHttpClient.
+]]
+function HttpClient.AttachJSONMetadata(json: { [any]: any })
+	json["metadata"] = {
+		["source"] = "Frigate_JsonHttpClient",
+		["client_version"] = VERSION,
+	}
+	return json
+end
+
+return HttpClient
+]]></string>
+            </Properties>
+          </Item>
+        </Item>
+        <Item class="Folder" referent="15">
+          <Properties>
+            <string name="Name">Performance</string>
+          </Properties>
+          <Item class="ModuleScript" referent="16">
+            <Properties>
+              <string name="Name">PerformanceTracking</string>
+              <string name="Source"><![CDATA[--[[
+	Internal utils for debugging/tracking package code.
+	The functionality of this module is reserved for internal use.
+]]
+
+local PerformanceTracking = {}
+
+function PerformanceTracking.ApplyCallTag(tag: string, func: (...any) -> ()): ()
+	debug.profilebegin(tag)
+	func()
+	debug.profileend()
+end
+
+return PerformanceTracking
+]]></string>
+            </Properties>
+          </Item>
+        </Item>
+      </Item>
+    </Item>
+    <Item class="Folder" referent="17">
+      <Properties>
+        <string name="Name">Packages</string>
+      </Properties>
+      <Item class="ModuleScript" referent="18">
+        <Properties>
+          <string name="Name">lemonsignal</string>
+          <string name="Source"><![CDATA[return require(script.Parent._Index["data-oriented-house_lemonsignal@1.11.0"]["lemonsignal"])
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="19">
+        <Properties>
+          <string name="Name">promise</string>
+          <string name="Source"><![CDATA[return require(script.Parent._Index["evaera_promise@4.0.0"]["promise"])
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="Folder" referent="20">
+        <Properties>
+          <string name="Name">_Index</string>
+        </Properties>
+        <Item class="Folder" referent="21">
+          <Properties>
+            <string name="Name">data-oriented-house_lemonsignal@1.11.0</string>
+          </Properties>
+          <Item class="ModuleScript" referent="22">
+            <Properties>
+              <string name="Name">lemonsignal</string>
+              <string name="Source"><![CDATA[--!optimize 2
+--!nocheck
+--!native
+
+export type Connection<U...> = {
+	Connected: boolean,
+
+	Disconnect: (self: Connection<U...>) -> (),
+	Reconnect: (self: Connection<U...>) -> (),
+}
+
+export type Signal<T...> = {
+	RBXScriptConnection: RBXScriptConnection?,
+
+	Connect: <U...>(self: Signal<T...>, fn: (...any) -> (), U...) -> Connection<U...>,
+	Once: <U...>(self: Signal<T...>, fn: (...any) -> (), U...) -> Connection<U...>,
+	Wait: (self: Signal<T...>) -> T...,
+	Fire: (self: Signal<T...>, T...) -> (),
+	DisconnectAll: (self: Signal<T...>) -> (),
+	Destroy: (self: Signal<T...>) -> (),
+}
+
+local freeThreads: { thread } = {}
+
+local function runCallback(callback, thread, ...)
+	callback(...)
+	table.insert(freeThreads, thread)
+end
+
+local function yielder()
+	while true do
+		runCallback(coroutine.yield())
+	end
+end
+
+local Connection = {}
+Connection.__index = Connection
+
+local function disconnect<U...>(self: Connection<U...>)
+	if not self.Connected then
+		return
+	end
+	self.Connected = false
+
+	local next = self._next
+	local prev = self._prev
+
+	if next then
+		next._prev = prev
+	end
+	if prev then
+		prev._next = next
+	end
+
+	local signal = self._signal
+	if signal._head == self then
+		signal._head = next
+	end
+end
+
+local function reconnect<U...>(self: Connection<U...>)
+	if self.Connected then
+		return
+	end
+	self.Connected = true
+
+	local signal = self._signal
+	local head = signal._head
+	if head then
+		head._prev = self
+	end
+	signal._head = self
+
+	self._next = head
+	self._prev = false
+end
+
+Connection.Disconnect = disconnect
+Connection.Reconnect = reconnect
+
+--\\ Signal //--
+local Signal = {}
+Signal.__index = Signal
+
+-- stylua: ignore
+local rbxConnect, rbxDisconnect do
+	if task then
+		local bindable = Instance.new("BindableEvent")
+		rbxConnect = bindable.Event.Connect
+		rbxDisconnect = bindable.Event:Connect(function() end).Disconnect
+		bindable:Destroy()
+	end
+end
+
+local function connect<T..., U...>(self: Signal<T...>, fn: (...any) -> (), ...: U...): Connection<U...>
+	local head = self._head
+	local varargs = { ... }
+	local cn = setmetatable({
+		Connected = true,
+		_signal = self,
+		_fn = fn,
+		_varargs = if #varargs == 0 then false else varargs,
+		_next = head,
+		_prev = false,
+	}, Connection)
+
+	if head then
+		head._prev = cn
+	end
+	self._head = cn
+
+	return cn
+end
+
+local function once<T..., U...>(self: Signal<T...>, fn: (...any) -> (), ...: U...)
+	local cn
+	cn = connect(self, function(...)
+		disconnect(cn)
+		fn(...)
+	end, ...)
+	return cn
+end
+
+local wait = if task
+	then function<T...>(self: Signal<T...>): ...any
+		local thread = coroutine.running()
+		local cn
+		cn = connect(self, function(...)
+			disconnect(cn)
+			if coroutine.status(thread) == "suspended" then
+				task.spawn(thread, ...)
+			end
+		end)
+		return coroutine.yield()
+	end
+	else function<T...>(self: Signal<T...>): ...any
+		local thread = coroutine.running()
+		local cn
+		cn = connect(self, function(...)
+			disconnect(cn)
+			local passed, message = coroutine.resume(thread, ...)
+			if not passed then
+				error(message, 0)
+			end
+		end)
+		return coroutine.yield()
+	end
+
+local fire = if task
+	then function<T...>(self: Signal<T...>, ...: any)
+		local cn = self._head
+		while cn do
+			local thread
+			if #freeThreads > 0 then
+				thread = freeThreads[#freeThreads]
+				freeThreads[#freeThreads] = nil
+			else
+				thread = coroutine.create(yielder)
+				coroutine.resume(thread)
+			end
+
+			if not cn._varargs then
+				task.spawn(thread, cn._fn, thread, ...)
+			else
+				local args = cn._varargs
+				local len = #args
+				local count = len
+				for _, value in { ... } do
+					count += 1
+					args[count] = value
+				end
+
+				task.spawn(thread, cn._fn, thread, table.unpack(args))
+
+				for i = count, len + 1, -1 do
+					args[i] = nil
+				end
+			end
+
+			cn = cn._next
+		end
+	end
+	else function<T...>(self: Signal<T...>, ...: any)
+		local cn = self._head
+		while cn do
+			local thread
+			if #freeThreads > 0 then
+				thread = freeThreads[#freeThreads]
+				freeThreads[#freeThreads] = nil
+			else
+				thread = coroutine.create(yielder)
+				coroutine.resume(thread)
+			end
+
+			if not cn._varargs then
+				local passed, message = coroutine.resume(thread, cn._fn, thread, ...)
+				if not passed then
+					print(string.format("%s\nstacktrace:\n%s", message, debug.traceback()))
+				end
+			else
+				local args = cn._varargs
+				local len = #args
+				local count = len
+				for _, value in { ... } do
+					count += 1
+					args[count] = value
+				end
+
+				local passed, message = coroutine.resume(thread, cn._fn, thread, table.unpack(args))
+				if not passed then
+					print(string.format("%s\nstacktrace:\n%s", message, debug.traceback()))
+				end
+
+				for i = count, len + 1, -1 do
+					args[i] = nil
+				end
+			end
+
+			cn = cn._next
+		end
+	end
+
+local function disconnectAll<T...>(self: Signal<T...>)
+	local cn = self._head
+	while cn do
+		disconnect(cn)
+		cn = cn._next
+	end
+end
+
+local function destroy<T...>(self: Signal<T...>)
+	disconnectAll(self)
+	local cn = self.RBXScriptConnection
+	if cn then
+		rbxDisconnect(cn)
+		self.RBXScriptConnection = nil
+	end
+end
+
+--\\ Constructors
+function Signal.new<T...>(): Signal<T...>
+	return setmetatable({ _head = false }, Signal)
+end
+
+function Signal.wrap<T...>(signal: RBXScriptSignal): Signal<T...>
+	local wrapper = setmetatable({ _head = false }, Signal)
+	wrapper.RBXScriptConnection = rbxConnect(signal, function(...)
+		fire(wrapper, ...)
+	end)
+	return wrapper
+end
+
+--\\ Methods
+Signal.Connect = connect
+Signal.Once = once
+Signal.Wait = wait
+Signal.Fire = fire
+Signal.DisconnectAll = disconnectAll
+Signal.Destroy = destroy
+
+return { new = Signal.new, wrap = Signal.wrap }
+]]></string>
+            </Properties>
+          </Item>
+        </Item>
+        <Item class="Folder" referent="23">
+          <Properties>
+            <string name="Name">evaera_promise@4.0.0</string>
+          </Properties>
+          <Item class="ModuleScript" referent="24">
+            <Properties>
+              <string name="Name">promise</string>
+              <string name="Source"><![CDATA[--[[
+	An implementation of Promises similar to Promise/A+.
+]]
+
+local ERROR_NON_PROMISE_IN_LIST = "Non-promise value passed into %s at index %s"
+local ERROR_NON_LIST = "Please pass a list of promises to %s"
+local ERROR_NON_FUNCTION = "Please pass a handler function to %s!"
+local MODE_KEY_METATABLE = { __mode = "k" }
+
+local function isCallable(value)
+	if type(value) == "function" then
+		return true
+	end
+
+	if type(value) == "table" then
+		local metatable = getmetatable(value)
+		if metatable and type(rawget(metatable, "__call")) == "function" then
+			return true
+		end
+	end
+
+	return false
+end
+
+--[[
+	Creates an enum dictionary with some metamethods to prevent common mistakes.
+]]
+local function makeEnum(enumName, members)
+	local enum = {}
+
+	for _, memberName in ipairs(members) do
+		enum[memberName] = memberName
+	end
+
+	return setmetatable(enum, {
+		__index = function(_, k)
+			error(string.format("%s is not in %s!", k, enumName), 2)
+		end,
+		__newindex = function()
+			error(string.format("Creating new members in %s is not allowed!", enumName), 2)
+		end,
+	})
+end
+
+--[=[
+	An object to represent runtime errors that occur during execution.
+	Promises that experience an error like this will be rejected with
+	an instance of this object.
+
+	@class Error
+]=]
+local Error
+do
+	Error = {
+		Kind = makeEnum("Promise.Error.Kind", {
+			"ExecutionError",
+			"AlreadyCancelled",
+			"NotResolvedInTime",
+			"TimedOut",
+		}),
+	}
+	Error.__index = Error
+
+	function Error.new(options, parent)
+		options = options or {}
+		return setmetatable({
+			error = tostring(options.error) or "[This error has no error text.]",
+			trace = options.trace,
+			context = options.context,
+			kind = options.kind,
+			parent = parent,
+			createdTick = os.clock(),
+			createdTrace = debug.traceback(),
+		}, Error)
+	end
+
+	function Error.is(anything)
+		if type(anything) == "table" then
+			local metatable = getmetatable(anything)
+
+			if type(metatable) == "table" then
+				return rawget(anything, "error") ~= nil and type(rawget(metatable, "extend")) == "function"
+			end
+		end
+
+		return false
+	end
+
+	function Error.isKind(anything, kind)
+		assert(kind ~= nil, "Argument #2 to Promise.Error.isKind must not be nil")
+
+		return Error.is(anything) and anything.kind == kind
+	end
+
+	function Error:extend(options)
+		options = options or {}
+
+		options.kind = options.kind or self.kind
+
+		return Error.new(options, self)
+	end
+
+	function Error:getErrorChain()
+		local runtimeErrors = { self }
+
+		while runtimeErrors[#runtimeErrors].parent do
+			table.insert(runtimeErrors, runtimeErrors[#runtimeErrors].parent)
+		end
+
+		return runtimeErrors
+	end
+
+	function Error:__tostring()
+		local errorStrings = {
+			string.format("-- Promise.Error(%s) --", self.kind or "?"),
+		}
+
+		for _, runtimeError in ipairs(self:getErrorChain()) do
+			table.insert(
+				errorStrings,
+				table.concat({
+					runtimeError.trace or runtimeError.error,
+					runtimeError.context,
+				}, "\n")
+			)
+		end
+
+		return table.concat(errorStrings, "\n")
+	end
+end
+
+--[[
+	Packs a number of arguments into a table and returns its length.
+
+	Used to cajole varargs without dropping sparse values.
+]]
+local function pack(...)
+	return select("#", ...), { ... }
+end
+
+--[[
+	Returns first value (success), and packs all following values.
+]]
+local function packResult(success, ...)
+	return success, select("#", ...), { ... }
+end
+
+local function makeErrorHandler(traceback)
+	assert(traceback ~= nil, "traceback is nil")
+
+	return function(err)
+		-- If the error object is already a table, forward it directly.
+		-- Should we extend the error here and add our own trace?
+
+		if type(err) == "table" then
+			return err
+		end
+
+		return Error.new({
+			error = err,
+			kind = Error.Kind.ExecutionError,
+			trace = debug.traceback(tostring(err), 2),
+			context = "Promise created at:\n\n" .. traceback,
+		})
+	end
+end
+
+--[[
+	Calls a Promise executor with error handling.
+]]
+local function runExecutor(traceback, callback, ...)
+	return packResult(xpcall(callback, makeErrorHandler(traceback), ...))
+end
+
+--[[
+	Creates a function that invokes a callback with correct error handling and
+	resolution mechanisms.
+]]
+local function createAdvancer(traceback, callback, resolve, reject)
+	return function(...)
+		local ok, resultLength, result = runExecutor(traceback, callback, ...)
+
+		if ok then
+			resolve(unpack(result, 1, resultLength))
+		else
+			reject(result[1])
+		end
+	end
+end
+
+local function isEmpty(t)
+	return next(t) == nil
+end
+
+--[=[
+	An enum value used to represent the Promise's status.
+	@interface Status
+	@tag enum
+	@within Promise
+	.Started "Started" -- The Promise is executing, and not settled yet.
+	.Resolved "Resolved" -- The Promise finished successfully.
+	.Rejected "Rejected" -- The Promise was rejected.
+	.Cancelled "Cancelled" -- The Promise was cancelled before it finished.
+]=]
+--[=[
+	@prop Status Status
+	@within Promise
+	@readonly
+	@tag enums
+	A table containing all members of the `Status` enum, e.g., `Promise.Status.Resolved`.
+]=]
+--[=[
+	A Promise is an object that represents a value that will exist in the future, but doesn't right now.
+	Promises allow you to then attach callbacks that can run once the value becomes available (known as *resolving*),
+	or if an error has occurred (known as *rejecting*).
+
+	@class Promise
+	@__index prototype
+]=]
+local Promise = {
+	Error = Error,
+	Status = makeEnum("Promise.Status", { "Started", "Resolved", "Rejected", "Cancelled" }),
+	_getTime = os.clock,
+	_timeEvent = game:GetService("RunService").Heartbeat,
+	_unhandledRejectionCallbacks = {},
+}
+Promise.prototype = {}
+Promise.__index = Promise.prototype
+
+function Promise._new(traceback, callback, parent)
+	if parent ~= nil and not Promise.is(parent) then
+		error("Argument #2 to Promise.new must be a promise or nil", 2)
+	end
+
+	local self = {
+		-- The executor thread.
+		_thread = nil,
+
+		-- Used to locate where a promise was created
+		_source = traceback,
+
+		_status = Promise.Status.Started,
+
+		-- A table containing a list of all results, whether success or failure.
+		-- Only valid if _status is set to something besides Started
+		_values = nil,
+
+		-- Lua doesn't like sparse arrays very much, so we explicitly store the
+		-- length of _values to handle middle nils.
+		_valuesLength = -1,
+
+		-- Tracks if this Promise has no error observers..
+		_unhandledRejection = true,
+
+		-- Queues representing functions we should invoke when we update!
+		_queuedResolve = {},
+		_queuedReject = {},
+		_queuedFinally = {},
+
+		-- The function to run when/if this promise is cancelled.
+		_cancellationHook = nil,
+
+		-- The "parent" of this promise in a promise chain. Required for
+		-- cancellation propagation upstream.
+		_parent = parent,
+
+		-- Consumers are Promises that have chained onto this one.
+		-- We track them for cancellation propagation downstream.
+		_consumers = setmetatable({}, MODE_KEY_METATABLE),
+	}
+
+	if parent and parent._status == Promise.Status.Started then
+		parent._consumers[self] = true
+	end
+
+	setmetatable(self, Promise)
+
+	local function resolve(...)
+		self:_resolve(...)
+	end
+
+	local function reject(...)
+		self:_reject(...)
+	end
+
+	local function onCancel(cancellationHook)
+		if cancellationHook then
+			if self._status == Promise.Status.Cancelled then
+				cancellationHook()
+			else
+				self._cancellationHook = cancellationHook
+			end
+		end
+
+		return self._status == Promise.Status.Cancelled
+	end
+
+	self._thread = coroutine.create(function()
+		local ok, _, result = runExecutor(self._source, callback, resolve, reject, onCancel)
+
+		if not ok then
+			reject(result[1])
+		end
+	end)
+
+	task.spawn(self._thread)
+
+	return self
+end
+
+--[=[
+	Construct a new Promise that will be resolved or rejected with the given callbacks.
+
+	If you `resolve` with a Promise, it will be chained onto.
+
+	You can safely yield within the executor function and it will not block the creating thread.
+
+	```lua
+	local myFunction()
+		return Promise.new(function(resolve, reject, onCancel)
+			wait(1)
+			resolve("Hello world!")
+		end)
+	end
+
+	myFunction():andThen(print)
+	```
+
+	You do not need to use `pcall` within a Promise. Errors that occur during execution will be caught and turned into a rejection automatically. If `error()` is called with a table, that table will be the rejection value. Otherwise, string errors will be converted into `Promise.Error(Promise.Error.Kind.ExecutionError)` objects for tracking debug information.
+
+	You may register an optional cancellation hook by using the `onCancel` argument:
+
+	* This should be used to abort any ongoing operations leading up to the promise being settled.
+	* Call the `onCancel` function with a function callback as its only argument to set a hook which will in turn be called when/if the promise is cancelled.
+	* `onCancel` returns `true` if the Promise was already cancelled when you called `onCancel`.
+	* Calling `onCancel` with no argument will not override a previously set cancellation hook, but it will still return `true` if the Promise is currently cancelled.
+	* You can set the cancellation hook at any time before resolving.
+	* When a promise is cancelled, calls to `resolve` or `reject` will be ignored, regardless of if you set a cancellation hook or not.
+
+	:::caution
+	If the Promise is cancelled, the `executor` thread is closed with `coroutine.close` after the cancellation hook is called.
+
+	You must perform any cleanup code in the cancellation hook: any time your executor yields, it **may never resume**.
+	:::
+
+	@param executor (resolve: (...: any) -> (), reject: (...: any) -> (), onCancel: (abortHandler?: () -> ()) -> boolean) -> ()
+	@return Promise
+]=]
+function Promise.new(executor)
+	return Promise._new(debug.traceback(nil, 2), executor)
+end
+
+function Promise:__tostring()
+	return string.format("Promise(%s)", self._status)
+end
+
+--[=[
+	The same as [Promise.new](/api/Promise#new), except execution begins after the next `Heartbeat` event.
+
+	This is a spiritual replacement for `spawn`, but it does not suffer from the same [issues](https://eryn.io/gist/3db84579866c099cdd5bb2ff37947cec) as `spawn`.
+
+	```lua
+	local function waitForChild(instance, childName, timeout)
+	  return Promise.defer(function(resolve, reject)
+		local child = instance:WaitForChild(childName, timeout)
+
+		;(child and resolve or reject)(child)
+	  end)
+	end
+	```
+
+	@param executor (resolve: (...: any) -> (), reject: (...: any) -> (), onCancel: (abortHandler?: () -> ()) -> boolean) -> ()
+	@return Promise
+]=]
+function Promise.defer(executor)
+	local traceback = debug.traceback(nil, 2)
+	local promise
+	promise = Promise._new(traceback, function(resolve, reject, onCancel)
+		local connection
+		connection = Promise._timeEvent:Connect(function()
+			connection:Disconnect()
+			local ok, _, result = runExecutor(traceback, executor, resolve, reject, onCancel)
+
+			if not ok then
+				reject(result[1])
+			end
+		end)
+	end)
+
+	return promise
+end
+
+-- Backwards compatibility
+Promise.async = Promise.defer
+
+--[=[
+	Creates an immediately resolved Promise with the given value.
+
+	```lua
+	-- Example using Promise.resolve to deliver cached values:
+	function getSomething(name)
+		if cache[name] then
+			return Promise.resolve(cache[name])
+		else
+			return Promise.new(function(resolve, reject)
+				local thing = getTheThing()
+				cache[name] = thing
+
+				resolve(thing)
+			end)
+		end
+	end
+	```
+
+	@param ... any
+	@return Promise<...any>
+]=]
+function Promise.resolve(...)
+	local length, values = pack(...)
+	return Promise._new(debug.traceback(nil, 2), function(resolve)
+		resolve(unpack(values, 1, length))
+	end)
+end
+
+--[=[
+	Creates an immediately rejected Promise with the given value.
+
+	:::caution
+	Something needs to consume this rejection (i.e. `:catch()` it), otherwise it will emit an unhandled Promise rejection warning on the next frame. Thus, you should not create and store rejected Promises for later use. Only create them on-demand as needed.
+	:::
+
+	@param ... any
+	@return Promise<...any>
+]=]
+function Promise.reject(...)
+	local length, values = pack(...)
+	return Promise._new(debug.traceback(nil, 2), function(_, reject)
+		reject(unpack(values, 1, length))
+	end)
+end
+
+--[[
+	Runs a non-promise-returning function as a Promise with the
+  given arguments.
+]]
+function Promise._try(traceback, callback, ...)
+	local valuesLength, values = pack(...)
+
+	return Promise._new(traceback, function(resolve)
+		resolve(callback(unpack(values, 1, valuesLength)))
+	end)
+end
+
+--[=[
+	Begins a Promise chain, calling a function and returning a Promise resolving with its return value. If the function errors, the returned Promise will be rejected with the error. You can safely yield within the Promise.try callback.
+
+	:::info
+	`Promise.try` is similar to [Promise.promisify](#promisify), except the callback is invoked immediately instead of returning a new function.
+	:::
+
+	```lua
+	Promise.try(function()
+		return math.random(1, 2) == 1 and "ok" or error("Oh an error!")
+	end)
+		:andThen(function(text)
+			print(text)
+		end)
+		:catch(function(err)
+			warn("Something went wrong")
+		end)
+	```
+
+	@param callback (...: T...) -> ...any
+	@param ... T... -- Additional arguments passed to `callback`
+	@return Promise
+]=]
+function Promise.try(callback, ...)
+	return Promise._try(debug.traceback(nil, 2), callback, ...)
+end
+
+--[[
+	Returns a new promise that:
+		* is resolved when all input promises resolve
+		* is rejected if ANY input promises reject
+]]
+function Promise._all(traceback, promises, amount)
+	if type(promises) ~= "table" then
+		error(string.format(ERROR_NON_LIST, "Promise.all"), 3)
+	end
+
+	-- We need to check that each value is a promise here so that we can produce
+	-- a proper error rather than a rejected promise with our error.
+	for i, promise in pairs(promises) do
+		if not Promise.is(promise) then
+			error(string.format(ERROR_NON_PROMISE_IN_LIST, "Promise.all", tostring(i)), 3)
+		end
+	end
+
+	-- If there are no values then return an already resolved promise.
+	if #promises == 0 or amount == 0 then
+		return Promise.resolve({})
+	end
+
+	return Promise._new(traceback, function(resolve, reject, onCancel)
+		-- An array to contain our resolved values from the given promises.
+		local resolvedValues = {}
+		local newPromises = {}
+
+		-- Keep a count of resolved promises because just checking the resolved
+		-- values length wouldn't account for promises that resolve with nil.
+		local resolvedCount = 0
+		local rejectedCount = 0
+		local done = false
+
+		local function cancel()
+			for _, promise in ipairs(newPromises) do
+				promise:cancel()
+			end
+		end
+
+		-- Called when a single value is resolved and resolves if all are done.
+		local function resolveOne(i, ...)
+			if done then
+				return
+			end
+
+			resolvedCount = resolvedCount + 1
+
+			if amount == nil then
+				resolvedValues[i] = ...
+			else
+				resolvedValues[resolvedCount] = ...
+			end
+
+			if resolvedCount >= (amount or #promises) then
+				done = true
+				resolve(resolvedValues)
+				cancel()
+			end
+		end
+
+		onCancel(cancel)
+
+		-- We can assume the values inside `promises` are all promises since we
+		-- checked above.
+		for i, promise in ipairs(promises) do
+			newPromises[i] = promise:andThen(function(...)
+				resolveOne(i, ...)
+			end, function(...)
+				rejectedCount = rejectedCount + 1
+
+				if amount == nil or #promises - rejectedCount < amount then
+					cancel()
+					done = true
+
+					reject(...)
+				end
+			end)
+		end
+
+		if done then
+			cancel()
+		end
+	end)
+end
+
+--[=[
+	Accepts an array of Promises and returns a new promise that:
+	* is resolved after all input promises resolve.
+	* is rejected if *any* input promises reject.
+
+	:::info
+	Only the first return value from each promise will be present in the resulting array.
+	:::
+
+	After any input Promise rejects, all other input Promises that are still pending will be cancelled if they have no other consumers.
+
+	```lua
+	local promises = {
+		returnsAPromise("example 1"),
+		returnsAPromise("example 2"),
+		returnsAPromise("example 3"),
+	}
+
+	return Promise.all(promises)
+	```
+
+	@param promises {Promise<T>}
+	@return Promise<{T}>
+]=]
+function Promise.all(promises)
+	return Promise._all(debug.traceback(nil, 2), promises)
+end
+
+--[=[
+	Folds an array of values or promises into a single value. The array is traversed sequentially.
+
+	The reducer function can return a promise or value directly. Each iteration receives the resolved value from the previous, and the first receives your defined initial value.
+
+	The folding will stop at the first rejection encountered.
+	```lua
+	local basket = {"blueberry", "melon", "pear", "melon"}
+	Promise.fold(basket, function(cost, fruit)
+		if fruit == "blueberry" then
+			return cost -- blueberries are free!
+		else
+			-- call a function that returns a promise with the fruit price
+			return fetchPrice(fruit):andThen(function(fruitCost)
+				return cost + fruitCost
+			end)
+		end
+	end, 0)
+	```
+
+	@since v3.1.0
+	@param list {T | Promise<T>}
+	@param reducer (accumulator: U, value: T, index: number) -> U | Promise<U>
+	@param initialValue U
+]=]
+function Promise.fold(list, reducer, initialValue)
+	assert(type(list) == "table", "Bad argument #1 to Promise.fold: must be a table")
+	assert(isCallable(reducer), "Bad argument #2 to Promise.fold: must be a function")
+
+	local accumulator = Promise.resolve(initialValue)
+	return Promise.each(list, function(resolvedElement, i)
+		accumulator = accumulator:andThen(function(previousValueResolved)
+			return reducer(previousValueResolved, resolvedElement, i)
+		end)
+	end):andThen(function()
+		return accumulator
+	end)
+end
+
+--[=[
+	Accepts an array of Promises and returns a Promise that is resolved as soon as `count` Promises are resolved from the input array. The resolved array values are in the order that the Promises resolved in. When this Promise resolves, all other pending Promises are cancelled if they have no other consumers.
+
+	`count` 0 results in an empty array. The resultant array will never have more than `count` elements.
+
+	```lua
+	local promises = {
+		returnsAPromise("example 1"),
+		returnsAPromise("example 2"),
+		returnsAPromise("example 3"),
+	}
+
+	return Promise.some(promises, 2) -- Only resolves with first 2 promises to resolve
+	```
+
+	@param promises {Promise<T>}
+	@param count number
+	@return Promise<{T}>
+]=]
+function Promise.some(promises, count)
+	assert(type(count) == "number", "Bad argument #2 to Promise.some: must be a number")
+
+	return Promise._all(debug.traceback(nil, 2), promises, count)
+end
+
+--[=[
+	Accepts an array of Promises and returns a Promise that is resolved as soon as *any* of the input Promises resolves. It will reject only if *all* input Promises reject. As soon as one Promises resolves, all other pending Promises are cancelled if they have no other consumers.
+
+	Resolves directly with the value of the first resolved Promise. This is essentially [[Promise.some]] with `1` count, except the Promise resolves with the value directly instead of an array with one element.
+
+	```lua
+	local promises = {
+		returnsAPromise("example 1"),
+		returnsAPromise("example 2"),
+		returnsAPromise("example 3"),
+	}
+
+	return Promise.any(promises) -- Resolves with first value to resolve (only rejects if all 3 rejected)
+	```
+
+	@param promises {Promise<T>}
+	@return Promise<T>
+]=]
+function Promise.any(promises)
+	return Promise._all(debug.traceback(nil, 2), promises, 1):andThen(function(values)
+		return values[1]
+	end)
+end
+
+--[=[
+	Accepts an array of Promises and returns a new Promise that resolves with an array of in-place Statuses when all input Promises have settled. This is equivalent to mapping `promise:finally` over the array of Promises.
+
+	```lua
+	local promises = {
+		returnsAPromise("example 1"),
+		returnsAPromise("example 2"),
+		returnsAPromise("example 3"),
+	}
+
+	return Promise.allSettled(promises)
+	```
+
+	@param promises {Promise<T>}
+	@return Promise<{Status}>
+]=]
+function Promise.allSettled(promises)
+	if type(promises) ~= "table" then
+		error(string.format(ERROR_NON_LIST, "Promise.allSettled"), 2)
+	end
+
+	-- We need to check that each value is a promise here so that we can produce
+	-- a proper error rather than a rejected promise with our error.
+	for i, promise in pairs(promises) do
+		if not Promise.is(promise) then
+			error(string.format(ERROR_NON_PROMISE_IN_LIST, "Promise.allSettled", tostring(i)), 2)
+		end
+	end
+
+	-- If there are no values then return an already resolved promise.
+	if #promises == 0 then
+		return Promise.resolve({})
+	end
+
+	return Promise._new(debug.traceback(nil, 2), function(resolve, _, onCancel)
+		-- An array to contain our resolved values from the given promises.
+		local fates = {}
+		local newPromises = {}
+
+		-- Keep a count of resolved promises because just checking the resolved
+		-- values length wouldn't account for promises that resolve with nil.
+		local finishedCount = 0
+
+		-- Called when a single value is resolved and resolves if all are done.
+		local function resolveOne(i, ...)
+			finishedCount = finishedCount + 1
+
+			fates[i] = ...
+
+			if finishedCount >= #promises then
+				resolve(fates)
+			end
+		end
+
+		onCancel(function()
+			for _, promise in ipairs(newPromises) do
+				promise:cancel()
+			end
+		end)
+
+		-- We can assume the values inside `promises` are all promises since we
+		-- checked above.
+		for i, promise in ipairs(promises) do
+			newPromises[i] = promise:finally(function(...)
+				resolveOne(i, ...)
+			end)
+		end
+	end)
+end
+
+--[=[
+	Accepts an array of Promises and returns a new promise that is resolved or rejected as soon as any Promise in the array resolves or rejects.
+
+	:::warning
+	If the first Promise to settle from the array settles with a rejection, the resulting Promise from `race` will reject.
+
+	If you instead want to tolerate rejections, and only care about at least one Promise resolving, you should use [Promise.any](#any) or [Promise.some](#some) instead.
+	:::
+
+	All other Promises that don't win the race will be cancelled if they have no other consumers.
+
+	```lua
+	local promises = {
+		returnsAPromise("example 1"),
+		returnsAPromise("example 2"),
+		returnsAPromise("example 3"),
+	}
+
+	return Promise.race(promises) -- Only returns 1st value to resolve or reject
+	```
+
+	@param promises {Promise<T>}
+	@return Promise<T>
+]=]
+function Promise.race(promises)
+	assert(type(promises) == "table", string.format(ERROR_NON_LIST, "Promise.race"))
+
+	for i, promise in pairs(promises) do
+		assert(Promise.is(promise), string.format(ERROR_NON_PROMISE_IN_LIST, "Promise.race", tostring(i)))
+	end
+
+	return Promise._new(debug.traceback(nil, 2), function(resolve, reject, onCancel)
+		local newPromises = {}
+		local finished = false
+
+		local function cancel()
+			for _, promise in ipairs(newPromises) do
+				promise:cancel()
+			end
+		end
+
+		local function finalize(callback)
+			return function(...)
+				cancel()
+				finished = true
+				return callback(...)
+			end
+		end
+
+		if onCancel(finalize(reject)) then
+			return
+		end
+
+		for i, promise in ipairs(promises) do
+			newPromises[i] = promise:andThen(finalize(resolve), finalize(reject))
+		end
+
+		if finished then
+			cancel()
+		end
+	end)
+end
+
+--[=[
+	Iterates serially over the given an array of values, calling the predicate callback on each value before continuing.
+
+	If the predicate returns a Promise, we wait for that Promise to resolve before moving on to the next item
+	in the array.
+
+	:::info
+	`Promise.each` is similar to `Promise.all`, except the Promises are ran in order instead of all at once.
+
+	But because Promises are eager, by the time they are created, they're already running. Thus, we need a way to defer creation of each Promise until a later time.
+
+	The predicate function exists as a way for us to operate on our data instead of creating a new closure for each Promise. If you would prefer, you can pass in an array of functions, and in the predicate, call the function and return its return value.
+	:::
+
+	```lua
+	Promise.each({
+		"foo",
+		"bar",
+		"baz",
+		"qux"
+	}, function(value, index)
+		return Promise.delay(1):andThen(function()
+		print(("%d) Got %s!"):format(index, value))
+		end)
+	end)
+
+	--[[
+		(1 second passes)
+		> 1) Got foo!
+		(1 second passes)
+		> 2) Got bar!
+		(1 second passes)
+		> 3) Got baz!
+		(1 second passes)
+		> 4) Got qux!
+	]]
+	```
+
+	If the Promise a predicate returns rejects, the Promise from `Promise.each` is also rejected with the same value.
+
+	If the array of values contains a Promise, when we get to that point in the list, we wait for the Promise to resolve before calling the predicate with the value.
+
+	If a Promise in the array of values is already Rejected when `Promise.each` is called, `Promise.each` rejects with that value immediately (the predicate callback will never be called even once). If a Promise in the list is already Cancelled when `Promise.each` is called, `Promise.each` rejects with `Promise.Error(Promise.Error.Kind.AlreadyCancelled`). If a Promise in the array of values is Started at first, but later rejects, `Promise.each` will reject with that value and iteration will not continue once iteration encounters that value.
+
+	Returns a Promise containing an array of the returned/resolved values from the predicate for each item in the array of values.
+
+	If this Promise returned from `Promise.each` rejects or is cancelled for any reason, the following are true:
+	- Iteration will not continue.
+	- Any Promises within the array of values will now be cancelled if they have no other consumers.
+	- The Promise returned from the currently active predicate will be cancelled if it hasn't resolved yet.
+
+	@since 3.0.0
+	@param list {T | Promise<T>}
+	@param predicate (value: T, index: number) -> U | Promise<U>
+	@return Promise<{U}>
+]=]
+function Promise.each(list, predicate)
+	assert(type(list) == "table", string.format(ERROR_NON_LIST, "Promise.each"))
+	assert(isCallable(predicate), string.format(ERROR_NON_FUNCTION, "Promise.each"))
+
+	return Promise._new(debug.traceback(nil, 2), function(resolve, reject, onCancel)
+		local results = {}
+		local promisesToCancel = {}
+
+		local cancelled = false
+
+		local function cancel()
+			for _, promiseToCancel in ipairs(promisesToCancel) do
+				promiseToCancel:cancel()
+			end
+		end
+
+		onCancel(function()
+			cancelled = true
+
+			cancel()
+		end)
+
+		-- We need to preprocess the list of values and look for Promises.
+		-- If we find some, we must register our andThen calls now, so that those Promises have a consumer
+		-- from us registered. If we don't do this, those Promises might get cancelled by something else
+		-- before we get to them in the series because it's not possible to tell that we plan to use it
+		-- unless we indicate it here.
+
+		local preprocessedList = {}
+
+		for index, value in ipairs(list) do
+			if Promise.is(value) then
+				if value:getStatus() == Promise.Status.Cancelled then
+					cancel()
+					return reject(Error.new({
+						error = "Promise is cancelled",
+						kind = Error.Kind.AlreadyCancelled,
+						context = string.format(
+							"The Promise that was part of the array at index %d passed into Promise.each was already cancelled when Promise.each began.\n\nThat Promise was created at:\n\n%s",
+							index,
+							value._source
+						),
+					}))
+				elseif value:getStatus() == Promise.Status.Rejected then
+					cancel()
+					return reject(select(2, value:await()))
+				end
+
+				-- Chain a new Promise from this one so we only cancel ours
+				local ourPromise = value:andThen(function(...)
+					return ...
+				end)
+
+				table.insert(promisesToCancel, ourPromise)
+				preprocessedList[index] = ourPromise
+			else
+				preprocessedList[index] = value
+			end
+		end
+
+		for index, value in ipairs(preprocessedList) do
+			if Promise.is(value) then
+				local success
+				success, value = value:await()
+
+				if not success then
+					cancel()
+					return reject(value)
+				end
+			end
+
+			if cancelled then
+				return
+			end
+
+			local predicatePromise = Promise.resolve(predicate(value, index))
+
+			table.insert(promisesToCancel, predicatePromise)
+
+			local success, result = predicatePromise:await()
+
+			if not success then
+				cancel()
+				return reject(result)
+			end
+
+			results[index] = result
+		end
+
+		resolve(results)
+	end)
+end
+
+--[=[
+	Checks whether the given object is a Promise via duck typing. This only checks if the object is a table and has an `andThen` method.
+
+	@param object any
+	@return boolean -- `true` if the given `object` is a Promise.
+]=]
+function Promise.is(object)
+	if type(object) ~= "table" then
+		return false
+	end
+
+	local objectMetatable = getmetatable(object)
+
+	if objectMetatable == Promise then
+		-- The Promise came from this library.
+		return true
+	elseif objectMetatable == nil then
+		-- No metatable, but we should still chain onto tables with andThen methods
+		return isCallable(object.andThen)
+	elseif
+		type(objectMetatable) == "table"
+		and type(rawget(objectMetatable, "__index")) == "table"
+		and isCallable(rawget(rawget(objectMetatable, "__index"), "andThen"))
+	then
+		-- Maybe this came from a different or older Promise library.
+		return true
+	end
+
+	return false
+end
+
+--[=[
+	Wraps a function that yields into one that returns a Promise.
+
+	Any errors that occur while executing the function will be turned into rejections.
+
+	:::info
+	`Promise.promisify` is similar to [Promise.try](#try), except the callback is returned as a callable function instead of being invoked immediately.
+	:::
+
+	```lua
+	local sleep = Promise.promisify(wait)
+
+	sleep(1):andThen(print)
+	```
+
+	```lua
+	local isPlayerInGroup = Promise.promisify(function(player, groupId)
+		return player:IsInGroup(groupId)
+	end)
+	```
+
+	@param callback (...: any) -> ...any
+	@return (...: any) -> Promise
+]=]
+function Promise.promisify(callback)
+	return function(...)
+		return Promise._try(debug.traceback(nil, 2), callback, ...)
+	end
+end
+
+--[=[
+	Returns a Promise that resolves after `seconds` seconds have passed. The Promise resolves with the actual amount of time that was waited.
+
+	This function is **not** a wrapper around `wait`. `Promise.delay` uses a custom scheduler which provides more accurate timing. As an optimization, cancelling this Promise instantly removes the task from the scheduler.
+
+	:::warning
+	Passing `NaN`, infinity, or a number less than 1/60 is equivalent to passing 1/60.
+	:::
+
+	```lua
+		Promise.delay(5):andThenCall(print, "This prints after 5 seconds")
+	```
+
+	@function delay
+	@within Promise
+	@param seconds number
+	@return Promise<number>
+]=]
+do
+	-- uses a sorted doubly linked list (queue) to achieve O(1) remove operations and O(n) for insert
+
+	-- the initial node in the linked list
+	local first
+	local connection
+
+	function Promise.delay(seconds)
+		assert(type(seconds) == "number", "Bad argument #1 to Promise.delay, must be a number.")
+		-- If seconds is -INF, INF, NaN, or less than 1 / 60, assume seconds is 1 / 60.
+		-- This mirrors the behavior of wait()
+		if not (seconds >= 1 / 60) or seconds == math.huge then
+			seconds = 1 / 60
+		end
+
+		return Promise._new(debug.traceback(nil, 2), function(resolve, _, onCancel)
+			local startTime = Promise._getTime()
+			local endTime = startTime + seconds
+
+			local node = {
+				resolve = resolve,
+				startTime = startTime,
+				endTime = endTime,
+			}
+
+			if connection == nil then -- first is nil when connection is nil
+				first = node
+				connection = Promise._timeEvent:Connect(function()
+					local threadStart = Promise._getTime()
+
+					while first ~= nil and first.endTime < threadStart do
+						local current = first
+						first = current.next
+
+						if first == nil then
+							connection:Disconnect()
+							connection = nil
+						else
+							first.previous = nil
+						end
+
+						current.resolve(Promise._getTime() - current.startTime)
+					end
+				end)
+			else -- first is non-nil
+				if first.endTime < endTime then -- if `node` should be placed after `first`
+					-- we will insert `node` between `current` and `next`
+					-- (i.e. after `current` if `next` is nil)
+					local current = first
+					local next = current.next
+
+					while next ~= nil and next.endTime < endTime do
+						current = next
+						next = current.next
+					end
+
+					-- `current` must be non-nil, but `next` could be `nil` (i.e. last item in list)
+					current.next = node
+					node.previous = current
+
+					if next ~= nil then
+						node.next = next
+						next.previous = node
+					end
+				else
+					-- set `node` to `first`
+					node.next = first
+					first.previous = node
+					first = node
+				end
+			end
+
+			onCancel(function()
+				-- remove node from queue
+				local next = node.next
+
+				if first == node then
+					if next == nil then -- if `node` is the first and last
+						connection:Disconnect()
+						connection = nil
+					else -- if `node` is `first` and not the last
+						next.previous = nil
+					end
+					first = next
+				else
+					local previous = node.previous
+					-- since `node` is not `first`, then we know `previous` is non-nil
+					previous.next = next
+
+					if next ~= nil then
+						next.previous = previous
+					end
+				end
+			end)
+		end)
+	end
+end
+
+--[=[
+	Returns a new Promise that resolves if the chained Promise resolves within `seconds` seconds, or rejects if execution time exceeds `seconds`. The chained Promise will be cancelled if the timeout is reached.
+
+	Rejects with `rejectionValue` if it is non-nil. If a `rejectionValue` is not given, it will reject with a `Promise.Error(Promise.Error.Kind.TimedOut)`. This can be checked with [[Error.isKind]].
+
+	```lua
+	getSomething():timeout(5):andThen(function(something)
+		-- got something and it only took at max 5 seconds
+	end):catch(function(e)
+		-- Either getting something failed or the time was exceeded.
+
+		if Promise.Error.isKind(e, Promise.Error.Kind.TimedOut) then
+			warn("Operation timed out!")
+		else
+			warn("Operation encountered an error!")
+		end
+	end)
+	```
+
+	Sugar for:
+
+	```lua
+	Promise.race({
+		Promise.delay(seconds):andThen(function()
+			return Promise.reject(
+				rejectionValue == nil
+				and Promise.Error.new({ kind = Promise.Error.Kind.TimedOut })
+				or rejectionValue
+			)
+		end),
+		promise
+	})
+	```
+
+	@param seconds number
+	@param rejectionValue? any -- The value to reject with if the timeout is reached
+	@return Promise
+]=]
+function Promise.prototype:timeout(seconds, rejectionValue)
+	local traceback = debug.traceback(nil, 2)
+
+	return Promise.race({
+		Promise.delay(seconds):andThen(function()
+			return Promise.reject(rejectionValue == nil and Error.new({
+				kind = Error.Kind.TimedOut,
+				error = "Timed out",
+				context = string.format(
+					"Timeout of %d seconds exceeded.\n:timeout() called at:\n\n%s",
+					seconds,
+					traceback
+				),
+			}) or rejectionValue)
+		end),
+		self,
+	})
+end
+
+--[=[
+	Returns the current Promise status.
+
+	@return Status
+]=]
+function Promise.prototype:getStatus()
+	return self._status
+end
+
+--[[
+	Creates a new promise that receives the result of this promise.
+
+	The given callbacks are invoked depending on that result.
+]]
+function Promise.prototype:_andThen(traceback, successHandler, failureHandler)
+	self._unhandledRejection = false
+
+	-- If we are already cancelled, we return a cancelled Promise
+	if self._status == Promise.Status.Cancelled then
+		local promise = Promise.new(function() end)
+		promise:cancel()
+
+		return promise
+	end
+
+	-- Create a new promise to follow this part of the chain
+	return Promise._new(traceback, function(resolve, reject, onCancel)
+		-- Our default callbacks just pass values onto the next promise.
+		-- This lets success and failure cascade correctly!
+
+		local successCallback = resolve
+		if successHandler then
+			successCallback = createAdvancer(traceback, successHandler, resolve, reject)
+		end
+
+		local failureCallback = reject
+		if failureHandler then
+			failureCallback = createAdvancer(traceback, failureHandler, resolve, reject)
+		end
+
+		if self._status == Promise.Status.Started then
+			-- If we haven't resolved yet, put ourselves into the queue
+			table.insert(self._queuedResolve, successCallback)
+			table.insert(self._queuedReject, failureCallback)
+
+			onCancel(function()
+				-- These are guaranteed to exist because the cancellation handler is guaranteed to only
+				-- be called at most once
+				if self._status == Promise.Status.Started then
+					table.remove(self._queuedResolve, table.find(self._queuedResolve, successCallback))
+					table.remove(self._queuedReject, table.find(self._queuedReject, failureCallback))
+				end
+			end)
+		elseif self._status == Promise.Status.Resolved then
+			-- This promise has already resolved! Trigger success immediately.
+			successCallback(unpack(self._values, 1, self._valuesLength))
+		elseif self._status == Promise.Status.Rejected then
+			-- This promise died a terrible death! Trigger failure immediately.
+			failureCallback(unpack(self._values, 1, self._valuesLength))
+		end
+	end, self)
+end
+
+--[=[
+	Chains onto an existing Promise and returns a new Promise.
+
+	:::warning
+	Within the failure handler, you should never assume that the rejection value is a string. Some rejections within the Promise library are represented by [[Error]] objects. If you want to treat it as a string for debugging, you should call `tostring` on it first.
+	:::
+
+	You can return a Promise from the success or failure handler and it will be chained onto.
+
+	Calling `andThen` on a cancelled Promise returns a cancelled Promise.
+
+	:::tip
+	If the Promise returned by `andThen` is cancelled, `successHandler` and `failureHandler` will not run.
+
+	To run code no matter what, use [Promise:finally].
+	:::
+
+	@param successHandler (...: any) -> ...any
+	@param failureHandler? (...: any) -> ...any
+	@return Promise<...any>
+]=]
+function Promise.prototype:andThen(successHandler, failureHandler)
+	assert(successHandler == nil or isCallable(successHandler), string.format(ERROR_NON_FUNCTION, "Promise:andThen"))
+	assert(failureHandler == nil or isCallable(failureHandler), string.format(ERROR_NON_FUNCTION, "Promise:andThen"))
+
+	return self:_andThen(debug.traceback(nil, 2), successHandler, failureHandler)
+end
+
+--[=[
+	Shorthand for `Promise:andThen(nil, failureHandler)`.
+
+	Returns a Promise that resolves if the `failureHandler` worked without encountering an additional error.
+
+	:::warning
+	Within the failure handler, you should never assume that the rejection value is a string. Some rejections within the Promise library are represented by [[Error]] objects. If you want to treat it as a string for debugging, you should call `tostring` on it first.
+	:::
+
+	Calling `catch` on a cancelled Promise returns a cancelled Promise.
+
+	:::tip
+	If the Promise returned by `catch` is cancelled,  `failureHandler` will not run.
+
+	To run code no matter what, use [Promise:finally].
+	:::
+
+	@param failureHandler (...: any) -> ...any
+	@return Promise<...any>
+]=]
+function Promise.prototype:catch(failureHandler)
+	assert(failureHandler == nil or isCallable(failureHandler), string.format(ERROR_NON_FUNCTION, "Promise:catch"))
+	return self:_andThen(debug.traceback(nil, 2), nil, failureHandler)
+end
+
+--[=[
+	Similar to [Promise.andThen](#andThen), except the return value is the same as the value passed to the handler. In other words, you can insert a `:tap` into a Promise chain without affecting the value that downstream Promises receive.
+
+	```lua
+		getTheValue()
+		:tap(print)
+		:andThen(function(theValue)
+			print("Got", theValue, "even though print returns nil!")
+		end)
+	```
+
+	If you return a Promise from the tap handler callback, its value will be discarded but `tap` will still wait until it resolves before passing the original value through.
+
+	@param tapHandler (...: any) -> ...any
+	@return Promise<...any>
+]=]
+function Promise.prototype:tap(tapHandler)
+	assert(isCallable(tapHandler), string.format(ERROR_NON_FUNCTION, "Promise:tap"))
+	return self:_andThen(debug.traceback(nil, 2), function(...)
+		local callbackReturn = tapHandler(...)
+
+		if Promise.is(callbackReturn) then
+			local length, values = pack(...)
+			return callbackReturn:andThen(function()
+				return unpack(values, 1, length)
+			end)
+		end
+
+		return ...
+	end)
+end
+
+--[=[
+	Attaches an `andThen` handler to this Promise that calls the given callback with the predefined arguments. The resolved value is discarded.
+
+	```lua
+		promise:andThenCall(someFunction, "some", "arguments")
+	```
+
+	This is sugar for
+
+	```lua
+		promise:andThen(function()
+		return someFunction("some", "arguments")
+		end)
+	```
+
+	@param callback (...: any) -> any
+	@param ...? any -- Additional arguments which will be passed to `callback`
+	@return Promise
+]=]
+function Promise.prototype:andThenCall(callback, ...)
+	assert(isCallable(callback), string.format(ERROR_NON_FUNCTION, "Promise:andThenCall"))
+	local length, values = pack(...)
+	return self:_andThen(debug.traceback(nil, 2), function()
+		return callback(unpack(values, 1, length))
+	end)
+end
+
+--[=[
+	Attaches an `andThen` handler to this Promise that discards the resolved value and returns the given value from it.
+
+	```lua
+		promise:andThenReturn("some", "values")
+	```
+
+	This is sugar for
+
+	```lua
+		promise:andThen(function()
+			return "some", "values"
+		end)
+	```
+
+	:::caution
+	Promises are eager, so if you pass a Promise to `andThenReturn`, it will begin executing before `andThenReturn` is reached in the chain. Likewise, if you pass a Promise created from [[Promise.reject]] into `andThenReturn`, it's possible that this will trigger the unhandled rejection warning. If you need to return a Promise, it's usually best practice to use [[Promise.andThen]].
+	:::
+
+	@param ... any -- Values to return from the function
+	@return Promise
+]=]
+function Promise.prototype:andThenReturn(...)
+	local length, values = pack(...)
+	return self:_andThen(debug.traceback(nil, 2), function()
+		return unpack(values, 1, length)
+	end)
+end
+
+--[=[
+	Cancels this promise, preventing the promise from resolving or rejecting. Does not do anything if the promise is already settled.
+
+	Cancellations will propagate upwards and downwards through chained promises.
+
+	Promises will only be cancelled if all of their consumers are also cancelled. This is to say that if you call `andThen` twice on the same promise, and you cancel only one of the child promises, it will not cancel the parent promise until the other child promise is also cancelled.
+
+	```lua
+		promise:cancel()
+	```
+]=]
+function Promise.prototype:cancel()
+	if self._status ~= Promise.Status.Started then
+		return
+	end
+
+	self._status = Promise.Status.Cancelled
+
+	if self._cancellationHook then
+		self._cancellationHook()
+	end
+
+	coroutine.close(self._thread)
+
+	if self._parent then
+		self._parent:_consumerCancelled(self)
+	end
+
+	for child in pairs(self._consumers) do
+		child:cancel()
+	end
+
+	self:_finalize()
+end
+
+--[[
+	Used to decrease the number of consumers by 1, and if there are no more,
+	cancel this promise.
+]]
+function Promise.prototype:_consumerCancelled(consumer)
+	if self._status ~= Promise.Status.Started then
+		return
+	end
+
+	self._consumers[consumer] = nil
+
+	if next(self._consumers) == nil then
+		self:cancel()
+	end
+end
+
+--[[
+	Used to set a handler for when the promise resolves, rejects, or is
+	cancelled.
+]]
+function Promise.prototype:_finally(traceback, finallyHandler)
+	self._unhandledRejection = false
+
+	local promise = Promise._new(traceback, function(resolve, reject, onCancel)
+		local handlerPromise
+
+		onCancel(function()
+			-- The finally Promise is not a proper consumer of self. We don't care about the resolved value.
+			-- All we care about is running at the end. Therefore, if self has no other consumers, it's safe to
+			-- cancel. We don't need to hold out cancelling just because there's a finally handler.
+			self:_consumerCancelled(self)
+
+			if handlerPromise then
+				handlerPromise:cancel()
+			end
+		end)
+
+		local finallyCallback = resolve
+		if finallyHandler then
+			finallyCallback = function(...)
+				local callbackReturn = finallyHandler(...)
+
+				if Promise.is(callbackReturn) then
+					handlerPromise = callbackReturn
+
+					callbackReturn
+						:finally(function(status)
+							if status ~= Promise.Status.Rejected then
+								resolve(self)
+							end
+						end)
+						:catch(function(...)
+							reject(...)
+						end)
+				else
+					resolve(self)
+				end
+			end
+		end
+
+		if self._status == Promise.Status.Started then
+			-- The promise is not settled, so queue this.
+			table.insert(self._queuedFinally, finallyCallback)
+		else
+			-- The promise already settled or was cancelled, run the callback now.
+			finallyCallback(self._status)
+		end
+	end)
+
+	return promise
+end
+
+--[=[
+	Set a handler that will be called regardless of the promise's fate. The handler is called when the promise is
+	resolved, rejected, *or* cancelled.
+
+	Returns a new Promise that:
+	- resolves with the same values that this Promise resolves with.
+	- rejects with the same values that this Promise rejects with.
+	- is cancelled if this Promise is cancelled.
+
+	If the value you return from the handler is a Promise:
+	- We wait for the Promise to resolve, but we ultimately discard the resolved value.
+	- If the returned Promise rejects, the Promise returned from `finally` will reject with the rejected value from the
+	*returned* promise.
+	- If the `finally` Promise is cancelled, and you returned a Promise from the handler, we cancel that Promise too.
+
+	Otherwise, the return value from the `finally` handler is entirely discarded.
+
+	:::note Cancellation
+	As of Promise v4, `Promise:finally` does not count as a consumer of the parent Promise for cancellation purposes.
+	This means that if all of a Promise's consumers are cancelled and the only remaining callbacks are finally handlers,
+	the Promise is cancelled and the finally callbacks run then and there.
+
+	Cancellation still propagates through the `finally` Promise though: if you cancel the `finally` Promise, it can cancel
+	its parent Promise if it had no other consumers. Likewise, if the parent Promise is cancelled, the `finally` Promise
+	will also be cancelled.
+	:::
+
+	```lua
+	local thing = createSomething()
+
+	doSomethingWith(thing)
+		:andThen(function()
+			print("It worked!")
+			-- do something..
+		end)
+		:catch(function()
+			warn("Oh no it failed!")
+		end)
+		:finally(function()
+			-- either way, destroy thing
+
+			thing:Destroy()
+		end)
+
+	```
+
+	@param finallyHandler (status: Status) -> ...any
+	@return Promise<...any>
+]=]
+function Promise.prototype:finally(finallyHandler)
+	assert(finallyHandler == nil or isCallable(finallyHandler), string.format(ERROR_NON_FUNCTION, "Promise:finally"))
+	return self:_finally(debug.traceback(nil, 2), finallyHandler)
+end
+
+--[=[
+	Same as `andThenCall`, except for `finally`.
+
+	Attaches a `finally` handler to this Promise that calls the given callback with the predefined arguments.
+
+	@param callback (...: any) -> any
+	@param ...? any -- Additional arguments which will be passed to `callback`
+	@return Promise
+]=]
+function Promise.prototype:finallyCall(callback, ...)
+	assert(isCallable(callback), string.format(ERROR_NON_FUNCTION, "Promise:finallyCall"))
+	local length, values = pack(...)
+	return self:_finally(debug.traceback(nil, 2), function()
+		return callback(unpack(values, 1, length))
+	end)
+end
+
+--[=[
+	Attaches a `finally` handler to this Promise that discards the resolved value and returns the given value from it.
+
+	```lua
+		promise:finallyReturn("some", "values")
+	```
+
+	This is sugar for
+
+	```lua
+		promise:finally(function()
+			return "some", "values"
+		end)
+	```
+
+	@param ... any -- Values to return from the function
+	@return Promise
+]=]
+function Promise.prototype:finallyReturn(...)
+	local length, values = pack(...)
+	return self:_finally(debug.traceback(nil, 2), function()
+		return unpack(values, 1, length)
+	end)
+end
+
+--[=[
+	Yields the current thread until the given Promise completes. Returns the Promise's status, followed by the values that the promise resolved or rejected with.
+
+	@yields
+	@return Status -- The Status representing the fate of the Promise
+	@return ...any -- The values the Promise resolved or rejected with.
+]=]
+function Promise.prototype:awaitStatus()
+	self._unhandledRejection = false
+
+	if self._status == Promise.Status.Started then
+		local thread = coroutine.running()
+
+		self
+			:finally(function()
+				task.spawn(thread)
+			end)
+			-- The finally promise can propagate rejections, so we attach a catch handler to prevent the unhandled
+			-- rejection warning from appearing
+			:catch(
+				function() end
+			)
+
+		coroutine.yield()
+	end
+
+	if self._status == Promise.Status.Resolved then
+		return self._status, unpack(self._values, 1, self._valuesLength)
+	elseif self._status == Promise.Status.Rejected then
+		return self._status, unpack(self._values, 1, self._valuesLength)
+	end
+
+	return self._status
+end
+
+local function awaitHelper(status, ...)
+	return status == Promise.Status.Resolved, ...
+end
+
+--[=[
+	Yields the current thread until the given Promise completes. Returns true if the Promise resolved, followed by the values that the promise resolved or rejected with.
+
+	:::caution
+	If the Promise gets cancelled, this function will return `false`, which is indistinguishable from a rejection. If you need to differentiate, you should use [[Promise.awaitStatus]] instead.
+	:::
+
+	```lua
+		local worked, value = getTheValue():await()
+
+	if worked then
+		print("got", value)
+	else
+		warn("it failed")
+	end
+	```
+
+	@yields
+	@return boolean -- `true` if the Promise successfully resolved
+	@return ...any -- The values the Promise resolved or rejected with.
+]=]
+function Promise.prototype:await()
+	return awaitHelper(self:awaitStatus())
+end
+
+local function expectHelper(status, ...)
+	if status ~= Promise.Status.Resolved then
+		error((...) == nil and "Expected Promise rejected with no value." or (...), 3)
+	end
+
+	return ...
+end
+
+--[=[
+	Yields the current thread until the given Promise completes. Returns the values that the promise resolved with.
+
+	```lua
+	local worked = pcall(function()
+		print("got", getTheValue():expect())
+	end)
+
+	if not worked then
+		warn("it failed")
+	end
+	```
+
+	This is essentially sugar for:
+
+	```lua
+	select(2, assert(promise:await()))
+	```
+
+	**Errors** if the Promise rejects or gets cancelled.
+
+	@error any -- Errors with the rejection value if this Promise rejects or gets cancelled.
+	@yields
+	@return ...any -- The values the Promise resolved with.
+]=]
+function Promise.prototype:expect()
+	return expectHelper(self:awaitStatus())
+end
+
+-- Backwards compatibility
+Promise.prototype.awaitValue = Promise.prototype.expect
+
+--[[
+	Intended for use in tests.
+
+	Similar to await(), but instead of yielding if the promise is unresolved,
+	_unwrap will throw. This indicates an assumption that a promise has
+	resolved.
+]]
+function Promise.prototype:_unwrap()
+	if self._status == Promise.Status.Started then
+		error("Promise has not resolved or rejected.", 2)
+	end
+
+	local success = self._status == Promise.Status.Resolved
+
+	return success, unpack(self._values, 1, self._valuesLength)
+end
+
+function Promise.prototype:_resolve(...)
+	if self._status ~= Promise.Status.Started then
+		if Promise.is((...)) then
+			(...):_consumerCancelled(self)
+		end
+		return
+	end
+
+	-- If the resolved value was a Promise, we chain onto it!
+	if Promise.is((...)) then
+		-- Without this warning, arguments sometimes mysteriously disappear
+		if select("#", ...) > 1 then
+			local message = string.format(
+				"When returning a Promise from andThen, extra arguments are " .. "discarded! See:\n\n%s",
+				self._source
+			)
+			warn(message)
+		end
+
+		local chainedPromise = ...
+
+		local promise = chainedPromise:andThen(function(...)
+			self:_resolve(...)
+		end, function(...)
+			local maybeRuntimeError = chainedPromise._values[1]
+
+			-- Backwards compatibility < v2
+			if chainedPromise._error then
+				maybeRuntimeError = Error.new({
+					error = chainedPromise._error,
+					kind = Error.Kind.ExecutionError,
+					context = "[No stack trace available as this Promise originated from an older version of the Promise library (< v2)]",
+				})
+			end
+
+			if Error.isKind(maybeRuntimeError, Error.Kind.ExecutionError) then
+				return self:_reject(maybeRuntimeError:extend({
+					error = "This Promise was chained to a Promise that errored.",
+					trace = "",
+					context = string.format(
+						"The Promise at:\n\n%s\n...Rejected because it was chained to the following Promise, which encountered an error:\n",
+						self._source
+					),
+				}))
+			end
+
+			self:_reject(...)
+		end)
+
+		if promise._status == Promise.Status.Cancelled then
+			self:cancel()
+		elseif promise._status == Promise.Status.Started then
+			-- Adopt ourselves into promise for cancellation propagation.
+			self._parent = promise
+			promise._consumers[self] = true
+		end
+
+		return
+	end
+
+	self._status = Promise.Status.Resolved
+	self._valuesLength, self._values = pack(...)
+
+	-- We assume that these callbacks will not throw errors.
+	for _, callback in ipairs(self._queuedResolve) do
+		coroutine.wrap(callback)(...)
+	end
+
+	self:_finalize()
+end
+
+function Promise.prototype:_reject(...)
+	if self._status ~= Promise.Status.Started then
+		return
+	end
+
+	self._status = Promise.Status.Rejected
+	self._valuesLength, self._values = pack(...)
+
+	-- If there are any rejection handlers, call those!
+	if not isEmpty(self._queuedReject) then
+		-- We assume that these callbacks will not throw errors.
+		for _, callback in ipairs(self._queuedReject) do
+			coroutine.wrap(callback)(...)
+		end
+	else
+		-- At this point, no one was able to observe the error.
+		-- An error handler might still be attached if the error occurred
+		-- synchronously. We'll wait one tick, and if there are still no
+		-- observers, then we should put a message in the console.
+
+		local err = tostring((...))
+
+		coroutine.wrap(function()
+			Promise._timeEvent:Wait()
+
+			-- Someone observed the error, hooray!
+			if not self._unhandledRejection then
+				return
+			end
+
+			-- Build a reasonable message
+			local message = string.format("Unhandled Promise rejection:\n\n%s\n\n%s", err, self._source)
+
+			for _, callback in ipairs(Promise._unhandledRejectionCallbacks) do
+				task.spawn(callback, self, unpack(self._values, 1, self._valuesLength))
+			end
+
+			if Promise.TEST then
+				-- Don't spam output when we're running tests.
+				return
+			end
+
+			warn(message)
+		end)()
+	end
+
+	self:_finalize()
+end
+
+--[[
+	Calls any :finally handlers. We need this to be a separate method and
+	queue because we must call all of the finally callbacks upon a success,
+	failure, *and* cancellation.
+]]
+function Promise.prototype:_finalize()
+	for _, callback in ipairs(self._queuedFinally) do
+		-- Purposefully not passing values to callbacks here, as it could be the
+		-- resolved values, or rejected errors. If the developer needs the values,
+		-- they should use :andThen or :catch explicitly.
+		coroutine.wrap(callback)(self._status)
+	end
+
+	self._queuedFinally = nil
+	self._queuedReject = nil
+	self._queuedResolve = nil
+
+	-- Clear references to other Promises to allow gc
+	if not Promise.TEST then
+		self._parent = nil
+		self._consumers = nil
+	end
+
+	task.defer(coroutine.close, self._thread)
+end
+
+--[=[
+	Chains a Promise from this one that is resolved if this Promise is already resolved, and rejected if it is not resolved at the time of calling `:now()`. This can be used to ensure your `andThen` handler occurs on the same frame as the root Promise execution.
+
+	```lua
+	doSomething()
+		:now()
+		:andThen(function(value)
+			print("Got", value, "synchronously.")
+		end)
+	```
+
+	If this Promise is still running, Rejected, or Cancelled, the Promise returned from `:now()` will reject with the `rejectionValue` if passed, otherwise with a `Promise.Error(Promise.Error.Kind.NotResolvedInTime)`. This can be checked with [[Error.isKind]].
+
+	@param rejectionValue? any -- The value to reject with if the Promise isn't resolved
+	@return Promise
+]=]
+function Promise.prototype:now(rejectionValue)
+	local traceback = debug.traceback(nil, 2)
+	if self._status == Promise.Status.Resolved then
+		return self:_andThen(traceback, function(...)
+			return ...
+		end)
+	else
+		return Promise.reject(rejectionValue == nil and Error.new({
+			kind = Error.Kind.NotResolvedInTime,
+			error = "This Promise was not resolved in time for :now()",
+			context = ":now() was called at:\n\n" .. traceback,
+		}) or rejectionValue)
+	end
+end
+
+--[=[
+	Repeatedly calls a Promise-returning function up to `times` number of times, until the returned Promise resolves.
+
+	If the amount of retries is exceeded, the function will return the latest rejected Promise.
+
+	```lua
+	local function canFail(a, b, c)
+		return Promise.new(function(resolve, reject)
+			-- do something that can fail
+
+			local failed, thing = doSomethingThatCanFail(a, b, c)
+
+			if failed then
+				reject("it failed")
+			else
+				resolve(thing)
+			end
+		end)
+	end
+
+	local MAX_RETRIES = 10
+	local value = Promise.retry(canFail, MAX_RETRIES, "foo", "bar", "baz") -- args to send to canFail
+	```
+
+	@since 3.0.0
+	@param callback (...: P) -> Promise<T>
+	@param times number
+	@param ...? P
+	@return Promise<T>
+]=]
+function Promise.retry(callback, times, ...)
+	assert(isCallable(callback), "Parameter #1 to Promise.retry must be a function")
+	assert(type(times) == "number", "Parameter #2 to Promise.retry must be a number")
+
+	local args, length = { ... }, select("#", ...)
+
+	return Promise.resolve(callback(...)):catch(function(...)
+		if times > 0 then
+			return Promise.retry(callback, times - 1, unpack(args, 1, length))
+		else
+			return Promise.reject(...)
+		end
+	end)
+end
+
+--[=[
+	Repeatedly calls a Promise-returning function up to `times` number of times, waiting `seconds` seconds between each
+	retry, until the returned Promise resolves.
+
+	If the amount of retries is exceeded, the function will return the latest rejected Promise.
+
+	@since v3.2.0
+	@param callback (...: P) -> Promise<T>
+	@param times number
+	@param seconds number
+	@param ...? P
+	@return Promise<T>
+]=]
+function Promise.retryWithDelay(callback, times, seconds, ...)
+	assert(isCallable(callback), "Parameter #1 to Promise.retry must be a function")
+	assert(type(times) == "number", "Parameter #2 (times) to Promise.retry must be a number")
+	assert(type(seconds) == "number", "Parameter #3 (seconds) to Promise.retry must be a number")
+
+	local args, length = { ... }, select("#", ...)
+
+	return Promise.resolve(callback(...)):catch(function(...)
+		if times > 0 then
+			Promise.delay(seconds):await()
+
+			return Promise.retryWithDelay(callback, times - 1, seconds, unpack(args, 1, length))
+		else
+			return Promise.reject(...)
+		end
+	end)
+end
+
+--[=[
+	Converts an event into a Promise which resolves the next time the event fires.
+
+	The optional `predicate` callback, if passed, will receive the event arguments and should return `true` or `false`, based on if this fired event should resolve the Promise or not. If `true`, the Promise resolves. If `false`, nothing happens and the predicate will be rerun the next time the event fires.
+
+	The Promise will resolve with the event arguments.
+
+	:::tip
+	This function will work given any object with a `Connect` method. This includes all Roblox events.
+	:::
+
+	```lua
+	-- Creates a Promise which only resolves when `somePart` is touched
+	-- by a part named `"Something specific"`.
+	return Promise.fromEvent(somePart.Touched, function(part)
+		return part.Name == "Something specific"
+	end)
+	```
+
+	@since 3.0.0
+	@param event Event -- Any object with a `Connect` method. This includes all Roblox events.
+	@param predicate? (...: P) -> boolean -- A function which determines if the Promise should resolve with the given value, or wait for the next event to check again.
+	@return Promise<P>
+]=]
+function Promise.fromEvent(event, predicate)
+	predicate = predicate or function()
+		return true
+	end
+
+	return Promise._new(debug.traceback(nil, 2), function(resolve, _, onCancel)
+		local connection
+		local shouldDisconnect = false
+
+		local function disconnect()
+			connection:Disconnect()
+			connection = nil
+		end
+
+		-- We use shouldDisconnect because if the callback given to Connect is called before
+		-- Connect returns, connection will still be nil. This happens with events that queue up
+		-- events when there's nothing connected, such as RemoteEvents
+
+		connection = event:Connect(function(...)
+			local callbackValue = predicate(...)
+
+			if callbackValue == true then
+				resolve(...)
+
+				if connection then
+					disconnect()
+				else
+					shouldDisconnect = true
+				end
+			elseif type(callbackValue) ~= "boolean" then
+				error("Promise.fromEvent predicate should always return a boolean")
+			end
+		end)
+
+		if shouldDisconnect and connection then
+			return disconnect()
+		end
+
+		onCancel(disconnect)
+	end)
+end
+
+--[=[
+	Registers a callback that runs when an unhandled rejection happens. An unhandled rejection happens when a Promise
+	is rejected, and the rejection is not observed with `:catch`.
+
+	The callback is called with the actual promise that rejected, followed by the rejection values.
+
+	@since v3.2.0
+	@param callback (promise: Promise, ...: any) -- A callback that runs when an unhandled rejection happens.
+	@return () -> () -- Function that unregisters the `callback` when called
+]=]
+function Promise.onUnhandledRejection(callback)
+	table.insert(Promise._unhandledRejectionCallbacks, callback)
+
+	return function()
+		local index = table.find(Promise._unhandledRejectionCallbacks, callback)
+
+		if index then
+			table.remove(Promise._unhandledRejectionCallbacks, index)
+		end
+	end
+end
+
+return Promise
+]]></string>
+            </Properties>
+            <Item class="ModuleScript" referent="25">
+              <Properties>
+                <string name="Name">init.spec</string>
+                <string name="Source"><![CDATA[return function()
+	local Promise = require(script.Parent)
+	Promise.TEST = true
+
+	local timeEvent = Instance.new("BindableEvent")
+	Promise._timeEvent = timeEvent.Event
+
+	local advanceTime
+	do
+		local injectedPromiseTime = 0
+
+		Promise._getTime = function()
+			return injectedPromiseTime
+		end
+
+		function advanceTime(delta)
+			delta = delta or (1 / 60)
+
+			injectedPromiseTime = injectedPromiseTime + delta
+			timeEvent:Fire(delta)
+		end
+	end
+
+	local function pack(...)
+		local len = select("#", ...)
+
+		return len, { ... }
+	end
+
+	describe("Promise.Status", function()
+		it("should error if indexing nil value", function()
+			expect(function()
+				local _ = Promise.Status.wrong
+			end).to.throw()
+		end)
+	end)
+
+	describe("Unhandled rejection signal", function()
+		it("should call unhandled rejection callbacks", function()
+			local badPromise = Promise.new(function(_resolve, reject)
+				reject(1, 2)
+			end)
+
+			local callCount = 0
+
+			local function callback(promise, rejectionA, rejectionB)
+				callCount += 1
+
+				expect(promise).to.equal(badPromise)
+				expect(rejectionA).to.equal(1)
+				expect(rejectionB).to.equal(2)
+			end
+
+			local unregister = Promise.onUnhandledRejection(callback)
+
+			advanceTime()
+
+			expect(callCount).to.equal(1)
+
+			unregister()
+
+			Promise.new(function(_resolve, reject)
+				reject(3, 4)
+			end)
+
+			advanceTime()
+
+			expect(callCount).to.equal(1)
+		end)
+	end)
+
+	describe("Promise.new", function()
+		it("should instantiate with a callback", function()
+			local promise = Promise.new(function() end)
+
+			expect(promise).to.be.ok()
+		end)
+
+		it("should invoke the given callback with resolve and reject", function()
+			local callCount = 0
+			local resolveArg
+			local rejectArg
+
+			local promise = Promise.new(function(resolve, reject)
+				callCount = callCount + 1
+				resolveArg = resolve
+				rejectArg = reject
+			end)
+
+			expect(promise).to.be.ok()
+
+			expect(callCount).to.equal(1)
+			expect(resolveArg).to.be.a("function")
+			expect(rejectArg).to.be.a("function")
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+		end)
+
+		it("should resolve promises on resolve()", function()
+			local callCount = 0
+
+			local promise = Promise.new(function(resolve)
+				callCount = callCount + 1
+				resolve()
+			end)
+
+			expect(promise).to.be.ok()
+			expect(callCount).to.equal(1)
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+		end)
+
+		it("should reject promises on reject()", function()
+			local callCount = 0
+
+			local promise = Promise.new(function(resolve, reject)
+				callCount = callCount + 1
+				reject()
+			end)
+
+			expect(promise).to.be.ok()
+			expect(callCount).to.equal(1)
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+		end)
+
+		it("should reject on error in callback", function()
+			local callCount = 0
+
+			local promise = Promise.new(function()
+				callCount = callCount + 1
+				error("hahah")
+			end)
+
+			expect(promise).to.be.ok()
+			expect(callCount).to.equal(1)
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(tostring(promise._values[1]):find("hahah")).to.be.ok()
+
+			-- Loosely check for the pieces of the stack trace we expect
+			expect(tostring(promise._values[1]):find("init.spec")).to.be.ok()
+			expect(tostring(promise._values[1]):find("runExecutor")).to.be.ok()
+		end)
+
+		it("should work with C functions", function()
+			expect(function()
+				Promise.new(tick):andThen(tick)
+			end).to.never.throw()
+		end)
+
+		it("should have a nice tostring", function()
+			expect(tostring(Promise.resolve()):gmatch("Promise(Resolved)")).to.be.ok()
+		end)
+
+		it("should allow yielding", function()
+			local bindable = Instance.new("BindableEvent")
+			local promise = Promise.new(function(resolve)
+				bindable.Event:Wait()
+				resolve(5)
+			end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			bindable:Fire()
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(promise._values[1]).to.equal(5)
+		end)
+
+		it("should preserve stack traces of resolve-chained promises", function()
+			local function nestedCall(text)
+				error(text)
+			end
+
+			local promise = Promise.new(function(resolve)
+				resolve(Promise.new(function()
+					nestedCall("sample text")
+				end))
+			end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+
+			local trace = tostring(promise._values[1])
+			expect(trace:find("sample text")).to.be.ok()
+			expect(trace:find("nestedCall")).to.be.ok()
+			expect(trace:find("runExecutor")).to.be.ok()
+			expect(trace:find("runPlanNode")).to.be.ok()
+			expect(
+				trace:find("...Rejected because it was chained to the following Promise, which encountered an error:")
+			).to.be.ok()
+		end)
+
+		it("should report errors from Promises with _error (< v2)", function()
+			local oldPromise = Promise.reject()
+			oldPromise._error = "Sample error"
+
+			local newPromise = Promise.resolve():andThenReturn(oldPromise)
+
+			expect(newPromise:getStatus()).to.equal(Promise.Status.Rejected)
+
+			local trace = tostring(newPromise._values[1])
+			expect(trace:find("Sample error")).to.be.ok()
+			expect(
+				trace:find("...Rejected because it was chained to the following Promise, which encountered an error:")
+			).to.be.ok()
+			expect(trace:find("%[No stack trace available")).to.be.ok()
+		end)
+
+		it("should allow callable tables", function()
+			local promise = Promise.new(setmetatable({}, {
+				__call = function(_, resolve)
+					resolve(1)
+				end,
+			}))
+
+			local called = false
+			promise:andThen(setmetatable({}, {
+				__call = function(_, var)
+					expect(var).to.equal(1)
+					called = true
+				end,
+			}))
+
+			expect(called).to.equal(true)
+		end)
+
+		itSKIP("should close the thread after resolve", function()
+			local count = 0
+			Promise.new(function(resolve)
+				count += 1
+				resolve()
+				Promise.delay(1):await()
+				count += 1
+			end)
+
+			task.wait(1)
+
+			expect(count).to.equal(1)
+		end)
+	end)
+
+	describe("Promise.defer", function()
+		it("should execute after the time event", function()
+			local callCount = 0
+			local promise = Promise.defer(function(resolve, reject, onCancel, nothing)
+				expect(type(resolve)).to.equal("function")
+				expect(type(reject)).to.equal("function")
+				expect(type(onCancel)).to.equal("function")
+				expect(type(nothing)).to.equal("nil")
+
+				callCount = callCount + 1
+
+				resolve("foo")
+			end)
+
+			expect(callCount).to.equal(0)
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+
+			advanceTime()
+			expect(callCount).to.equal(1)
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+
+			advanceTime()
+			expect(callCount).to.equal(1)
+		end)
+	end)
+
+	describe("Promise.delay", function()
+		it("should schedule promise resolution", function()
+			local promise = Promise.delay(1)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+
+			advanceTime()
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+
+			advanceTime(1)
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+		end)
+
+		it("should allow for delays to be cancelled", function()
+			local promise = Promise.delay(2)
+
+			Promise.delay(1):andThen(function()
+				promise:cancel()
+			end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			advanceTime()
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			advanceTime(1)
+			expect(promise:getStatus()).to.equal(Promise.Status.Cancelled)
+			advanceTime(1)
+		end)
+	end)
+
+	describe("Promise.resolve", function()
+		it("should immediately resolve with a value", function()
+			local promise = Promise.resolve(5, 6)
+
+			expect(promise).to.be.ok()
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(promise._values[1]).to.equal(5)
+			expect(promise._values[2]).to.equal(6)
+		end)
+
+		it("should chain onto passed promises", function()
+			local promise = Promise.resolve(Promise.new(function(_, reject)
+				reject(7)
+			end))
+
+			expect(promise).to.be.ok()
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(promise._values[1]).to.equal(7)
+		end)
+	end)
+
+	describe("Promise.reject", function()
+		it("should immediately reject with a value", function()
+			local promise = Promise.reject(6, 7)
+
+			expect(promise).to.be.ok()
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(promise._values[1]).to.equal(6)
+			expect(promise._values[2]).to.equal(7)
+		end)
+
+		it("should pass a promise as-is as an error", function()
+			local innerPromise = Promise.new(function(resolve)
+				resolve(6)
+			end)
+
+			local promise = Promise.reject(innerPromise)
+
+			expect(promise).to.be.ok()
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(promise._values[1]).to.equal(innerPromise)
+		end)
+	end)
+
+	describe("Promise:andThen", function()
+		it("should allow yielding", function()
+			local bindable = Instance.new("BindableEvent")
+			local promise = Promise.resolve():andThen(function()
+				bindable.Event:Wait()
+				return 5
+			end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			bindable:Fire()
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(promise._values[1]).to.equal(5)
+		end)
+
+		it("should run andThens on a new thread", function()
+			local bindable = Instance.new("BindableEvent")
+
+			local resolve
+			local parentPromise = Promise.new(function(_resolve)
+				resolve = _resolve
+			end)
+
+			local deadlockedPromise = parentPromise:andThen(function()
+				bindable.Event:Wait()
+				return 5
+			end)
+
+			local successfulPromise = parentPromise:andThen(function()
+				return "foo"
+			end)
+
+			expect(parentPromise:getStatus()).to.equal(Promise.Status.Started)
+			resolve()
+			expect(successfulPromise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(successfulPromise._values[1]).to.equal("foo")
+			expect(deadlockedPromise:getStatus()).to.equal(Promise.Status.Started)
+		end)
+
+		it("should chain onto resolved promises", function()
+			local args
+			local argsLength
+			local callCount = 0
+			local badCallCount = 0
+
+			local promise = Promise.resolve(5)
+
+			local chained = promise:andThen(function(...)
+				argsLength, args = pack(...)
+				callCount = callCount + 1
+			end, function()
+				badCallCount = badCallCount + 1
+			end)
+
+			expect(badCallCount).to.equal(0)
+
+			expect(callCount).to.equal(1)
+			expect(argsLength).to.equal(1)
+			expect(args[1]).to.equal(5)
+
+			expect(promise).to.be.ok()
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(promise._values[1]).to.equal(5)
+
+			expect(chained).to.be.ok()
+			expect(chained).never.to.equal(promise)
+			expect(chained:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(#chained._values).to.equal(0)
+		end)
+
+		it("should chain onto rejected promises", function()
+			local args
+			local argsLength
+			local callCount = 0
+			local badCallCount = 0
+
+			local promise = Promise.reject(5)
+
+			local chained = promise:andThen(function(...)
+				badCallCount = badCallCount + 1
+			end, function(...)
+				argsLength, args = pack(...)
+				callCount = callCount + 1
+			end)
+
+			expect(badCallCount).to.equal(0)
+
+			expect(callCount).to.equal(1)
+			expect(argsLength).to.equal(1)
+			expect(args[1]).to.equal(5)
+
+			expect(promise).to.be.ok()
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(promise._values[1]).to.equal(5)
+
+			expect(chained).to.be.ok()
+			expect(chained).never.to.equal(promise)
+			expect(chained:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(#chained._values).to.equal(0)
+		end)
+
+		it("should reject on error in callback", function()
+			local callCount = 0
+
+			local promise = Promise.resolve(1):andThen(function()
+				callCount = callCount + 1
+				error("hahah")
+			end)
+
+			expect(promise).to.be.ok()
+			expect(callCount).to.equal(1)
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(tostring(promise._values[1]):find("hahah")).to.be.ok()
+
+			-- Loosely check for the pieces of the stack trace we expect
+			expect(tostring(promise._values[1]):find("init.spec")).to.be.ok()
+			expect(tostring(promise._values[1]):find("runExecutor")).to.be.ok()
+		end)
+
+		it("should chain onto asynchronously resolved promises", function()
+			local args
+			local argsLength
+			local callCount = 0
+			local badCallCount = 0
+
+			local startResolution
+			local promise = Promise.new(function(resolve)
+				startResolution = resolve
+			end)
+
+			local chained = promise:andThen(function(...)
+				args = { ... }
+				argsLength = select("#", ...)
+				callCount = callCount + 1
+			end, function()
+				badCallCount = badCallCount + 1
+			end)
+
+			expect(callCount).to.equal(0)
+			expect(badCallCount).to.equal(0)
+
+			startResolution(6)
+
+			expect(badCallCount).to.equal(0)
+
+			expect(callCount).to.equal(1)
+			expect(argsLength).to.equal(1)
+			expect(args[1]).to.equal(6)
+
+			expect(promise).to.be.ok()
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(promise._values[1]).to.equal(6)
+
+			expect(chained).to.be.ok()
+			expect(chained).never.to.equal(promise)
+			expect(chained:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(#chained._values).to.equal(0)
+		end)
+
+		it("should chain onto asynchronously rejected promises", function()
+			local args
+			local argsLength
+			local callCount = 0
+			local badCallCount = 0
+
+			local startResolution
+			local promise = Promise.new(function(_, reject)
+				startResolution = reject
+			end)
+
+			local chained = promise:andThen(function()
+				badCallCount = badCallCount + 1
+			end, function(...)
+				args = { ... }
+				argsLength = select("#", ...)
+				callCount = callCount + 1
+			end)
+
+			expect(callCount).to.equal(0)
+			expect(badCallCount).to.equal(0)
+
+			startResolution(6)
+
+			expect(badCallCount).to.equal(0)
+
+			expect(callCount).to.equal(1)
+			expect(argsLength).to.equal(1)
+			expect(args[1]).to.equal(6)
+
+			expect(promise).to.be.ok()
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(promise._values[1]).to.equal(6)
+
+			expect(chained).to.be.ok()
+			expect(chained).never.to.equal(promise)
+			expect(chained:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(#chained._values).to.equal(0)
+		end)
+
+		it("should propagate errors through multiple levels", function()
+			local x, y, z
+			Promise.new(function(resolve, reject)
+				reject(1, 2, 3)
+			end):andThen(function() end):catch(function(a, b, c)
+				x, y, z = a, b, c
+			end)
+
+			expect(x).to.equal(1)
+			expect(y).to.equal(2)
+			expect(z).to.equal(3)
+		end)
+
+		it("should not call queued callbacks from a cancelled sub-promise", function()
+			local resolve
+			local count = 0
+
+			local root = Promise.new(function(r)
+				resolve = r
+			end)
+
+			root:andThen(function()
+				count += 1
+			end)
+
+			root
+				:andThen(function()
+					count += 1
+				end)
+				:cancel()
+
+			resolve("foo")
+
+			expect(count).to.equal(1)
+		end)
+	end)
+
+	describe("Promise:cancel", function()
+		it("should mark promises as cancelled and not resolve or reject them", function()
+			local callCount = 0
+			local finallyCallCount = 0
+			local promise = Promise.new(function() end)
+				:andThen(function()
+					callCount = callCount + 1
+				end)
+				:finally(function()
+					finallyCallCount = finallyCallCount + 1
+				end)
+
+			promise:cancel()
+			promise:cancel() -- Twice to check call counts
+
+			expect(callCount).to.equal(0)
+			expect(finallyCallCount).to.equal(1)
+			expect(promise:getStatus()).to.equal(Promise.Status.Cancelled)
+		end)
+
+		it("should call the cancellation hook once", function()
+			local callCount = 0
+
+			local promise = Promise.new(function(resolve, reject, onCancel)
+				onCancel(function()
+					callCount = callCount + 1
+				end)
+			end)
+
+			promise:cancel()
+			promise:cancel() -- Twice to check call count
+
+			expect(callCount).to.equal(1)
+		end)
+
+		it("should propagate cancellations", function()
+			local promise = Promise.new(function() end)
+
+			local consumer1 = promise:andThen()
+			local consumer2 = promise:andThen()
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			expect(consumer1:getStatus()).to.equal(Promise.Status.Started)
+			expect(consumer2:getStatus()).to.equal(Promise.Status.Started)
+
+			consumer1:cancel()
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			expect(consumer1:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(consumer2:getStatus()).to.equal(Promise.Status.Started)
+
+			consumer2:cancel()
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(consumer1:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(consumer2:getStatus()).to.equal(Promise.Status.Cancelled)
+		end)
+
+		it("should affect downstream promises", function()
+			local promise = Promise.new(function() end)
+			local consumer = promise:andThen()
+
+			promise:cancel()
+
+			expect(consumer:getStatus()).to.equal(Promise.Status.Cancelled)
+		end)
+
+		it("should track consumers", function()
+			local pending = Promise.new(function() end)
+			local p0 = Promise.resolve()
+			local p1 = p0:andThen(function()
+				return pending
+			end)
+			local p2 = Promise.new(function(resolve)
+				resolve(p1)
+			end)
+			local p3 = p2:andThen(function() end)
+
+			expect(p1._parent).to.never.equal(p0)
+			expect(p2._parent).to.never.equal(p1)
+			expect(p2._consumers[p3]).to.be.ok()
+			expect(p3._parent).to.equal(p2)
+		end)
+
+		it("should cancel resolved pending promises", function()
+			local p1 = Promise.new(function() end)
+
+			local p2 = Promise.new(function(resolve)
+				resolve(p1)
+			end):finally(function() end)
+
+			p2:cancel()
+
+			expect(p1._status).to.equal(Promise.Status.Cancelled)
+			expect(p2._status).to.equal(Promise.Status.Cancelled)
+		end)
+
+		it("should close the promise thread", function()
+			local count = 0
+			local promise = Promise.new(function()
+				count += 1
+				Promise.delay(1):await()
+				count += 1
+			end)
+
+			promise:cancel()
+			advanceTime(2)
+
+			expect(count).to.equal(1)
+		end)
+	end)
+
+	describe("Promise:finally", function()
+		it("should be called upon resolve, reject, or cancel", function()
+			local callCount = 0
+
+			local function finally()
+				callCount = callCount + 1
+			end
+
+			-- Resolved promise
+			Promise.new(function(resolve, reject)
+				resolve()
+			end):finally(finally)
+
+			-- Chained promise
+			Promise.resolve():andThen(function() end):finally(finally):finally(finally)
+
+			-- Rejected promise
+			Promise.reject():finally(finally)
+
+			local cancelledPromise = Promise.new(function() end):finally(finally)
+			cancelledPromise:cancel()
+
+			expect(callCount).to.equal(5)
+		end)
+
+		it("should not forward return values", function()
+			local value
+
+			Promise.resolve(2)
+				:finally(function()
+					return 1
+				end)
+				:andThen(function(v)
+					value = v
+				end)
+
+			expect(value).to.equal(2)
+		end)
+
+		it("should not consume rejections", function()
+			local catchRan = false
+			local thenRan = false
+			Promise.reject(5)
+				:finally(function()
+					return 42
+				end)
+				:andThen(function()
+					thenRan = true
+				end)
+				:catch(function(value)
+					catchRan = true
+					expect(value).to.equal(5)
+				end)
+
+			expect(catchRan).to.equal(true)
+			expect(thenRan).to.equal(false)
+		end)
+
+		it("should wait for returned promises", function()
+			local resolve
+			local promise = Promise.reject("foo"):finally(function()
+				return Promise.new(function(r)
+					resolve = r
+				end)
+			end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+
+			resolve()
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			local _, value = promise:_unwrap()
+			expect(value).to.equal("foo")
+		end)
+
+		it("should reject with a returned rejected promise's value", function()
+			local reject
+			local promise = Promise.reject("foo"):finally(function()
+				return Promise.new(function(_, r)
+					reject = r
+				end)
+			end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+
+			reject("bar")
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			local _, value = promise:_unwrap()
+			expect(value).to.equal("bar")
+		end)
+
+		it("should reject when handler errors", function()
+			local errorValue = {}
+			local promise = Promise.reject("bar"):finally(function()
+				error(errorValue)
+			end)
+
+			local ok, value = promise:_unwrap()
+
+			expect(ok).to.equal(false)
+			expect(value).to.equal(errorValue)
+		end)
+
+		it("should not prevent cancellation", function()
+			local promise = Promise.new(function() end)
+
+			local finallyRan = false
+			promise:finally(function()
+				finallyRan = true
+			end)
+
+			local consumer = promise:andThen(function() end)
+
+			consumer:cancel()
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(finallyRan).to.equal(true)
+		end)
+
+		it("should propagate cancellation downwards", function()
+			local finallyRan = false
+			local andThenRan = false
+			local root = Promise.new(function() end)
+
+			local consumer = root:finally(function()
+				finallyRan = true
+			end)
+
+			root:cancel()
+
+			expect(root:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(consumer:getStatus()).to.equal(Promise.Status.Cancelled)
+
+			expect(finallyRan).to.equal(true)
+			expect(andThenRan).to.equal(false)
+		end)
+
+		it("should propagate cancellation upwards", function()
+			local finallyRan = false
+			local andThenRan = false
+			local root = Promise.new(function() end)
+
+			local consumer = root:finally(function()
+				finallyRan = true
+			end)
+
+			consumer:cancel()
+
+			expect(root:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(consumer:getStatus()).to.equal(Promise.Status.Cancelled)
+
+			expect(finallyRan).to.equal(true)
+			expect(andThenRan).to.equal(false)
+		end)
+
+		it("should cancel returned promise if cancelled", function()
+			local internal = Promise.new(function() end)
+
+			local promise = Promise.resolve():finally(function()
+				return internal
+			end)
+
+			promise:cancel()
+
+			expect(internal:getStatus()).to.equal(Promise.Status.Cancelled)
+		end)
+	end)
+
+	describe("Promise.all", function()
+		it("should error if given something other than a table", function()
+			expect(function()
+				Promise.all(1)
+			end).to.throw()
+		end)
+
+		it("should resolve instantly with an empty table if given no promises", function()
+			local promise = Promise.all({})
+			local success, value = promise:_unwrap()
+
+			expect(success).to.equal(true)
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(value).to.be.a("table")
+			expect(next(value)).to.equal(nil)
+		end)
+
+		it("should error if given non-promise values", function()
+			expect(function()
+				Promise.all({ {}, {}, {} })
+			end).to.throw()
+		end)
+
+		it("should wait for all promises to be resolved and return their values", function()
+			local resolveFunctions = {}
+
+			local testValuesLength, testValues = pack(1, "A string", nil, false)
+
+			local promises = {}
+
+			for i = 1, testValuesLength do
+				promises[i] = Promise.new(function(resolve)
+					resolveFunctions[i] = { resolve, testValues[i] }
+				end)
+			end
+
+			local combinedPromise = Promise.all(promises)
+
+			for _, resolve in ipairs(resolveFunctions) do
+				expect(combinedPromise:getStatus()).to.equal(Promise.Status.Started)
+				resolve[1](resolve[2])
+			end
+
+			local resultLength, result = pack(combinedPromise:_unwrap())
+			local success, resolved = unpack(result, 1, resultLength)
+
+			expect(resultLength).to.equal(2)
+			expect(success).to.equal(true)
+			expect(resolved).to.be.a("table")
+			expect(#resolved).to.equal(#promises)
+
+			for i = 1, testValuesLength do
+				expect(resolved[i]).to.equal(testValues[i])
+			end
+		end)
+
+		it("should reject if any individual promise rejected", function()
+			local rejectA
+			local resolveB
+
+			local a = Promise.new(function(_, reject)
+				rejectA = reject
+			end)
+
+			local b = Promise.new(function(resolve)
+				resolveB = resolve
+			end)
+
+			local combinedPromise = Promise.all({ a, b })
+
+			expect(combinedPromise:getStatus()).to.equal(Promise.Status.Started)
+
+			rejectA("baz", "qux")
+			resolveB("foo", "bar")
+
+			local resultLength, result = pack(combinedPromise:_unwrap())
+			local success, first, second = unpack(result, 1, resultLength)
+
+			expect(resultLength).to.equal(3)
+			expect(success).to.equal(false)
+			expect(first).to.equal("baz")
+			expect(second).to.equal("qux")
+			expect(b:getStatus()).to.equal(Promise.Status.Cancelled)
+		end)
+
+		it("should not resolve if resolved after rejecting", function()
+			local rejectA
+			local resolveB
+
+			local a = Promise.new(function(_, reject)
+				rejectA = reject
+			end)
+
+			local b = Promise.new(function(resolve)
+				resolveB = resolve
+			end)
+
+			local combinedPromise = Promise.all({ a, b })
+
+			expect(combinedPromise:getStatus()).to.equal(Promise.Status.Started)
+
+			rejectA("baz", "qux")
+			resolveB("foo", "bar")
+
+			local resultLength, result = pack(combinedPromise:_unwrap())
+			local success, first, second = unpack(result, 1, resultLength)
+
+			expect(resultLength).to.equal(3)
+			expect(success).to.equal(false)
+			expect(first).to.equal("baz")
+			expect(second).to.equal("qux")
+		end)
+
+		it("should only reject once", function()
+			local rejectA
+			local rejectB
+
+			local a = Promise.new(function(_, reject)
+				rejectA = reject
+			end)
+
+			local b = Promise.new(function(_, reject)
+				rejectB = reject
+			end)
+
+			local combinedPromise = Promise.all({ a, b })
+
+			expect(combinedPromise:getStatus()).to.equal(Promise.Status.Started)
+
+			rejectA("foo", "bar")
+
+			expect(combinedPromise:getStatus()).to.equal(Promise.Status.Rejected)
+
+			rejectB("baz", "qux")
+
+			local resultLength, result = pack(combinedPromise:_unwrap())
+			local success, first, second = unpack(result, 1, resultLength)
+
+			expect(resultLength).to.equal(3)
+			expect(success).to.equal(false)
+			expect(first).to.equal("foo")
+			expect(second).to.equal("bar")
+		end)
+
+		it("should error if a non-array table is passed in", function()
+			local ok, err = pcall(function()
+				Promise.all(Promise.new(function() end))
+			end)
+
+			expect(ok).to.be.ok()
+			expect(err:find("Non%-promise")).to.be.ok()
+		end)
+
+		it("should cancel pending promises if one rejects", function()
+			local p = Promise.new(function() end)
+			expect(Promise.all({
+				Promise.resolve(),
+				Promise.reject(),
+				p,
+			}):getStatus()).to.equal(Promise.Status.Rejected)
+			expect(p:getStatus()).to.equal(Promise.Status.Cancelled)
+		end)
+
+		it("should cancel promises if it is cancelled", function()
+			local p = Promise.new(function() end)
+			p:andThen(function() end)
+
+			local promises = {
+				Promise.new(function() end),
+				Promise.new(function() end),
+				p,
+			}
+
+			Promise.all(promises):cancel()
+
+			expect(promises[1]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[2]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[3]:getStatus()).to.equal(Promise.Status.Started)
+		end)
+	end)
+
+	describe("Promise.fold", function()
+		it("should return the initial value in a promise when the list is empty", function()
+			local initialValue = {}
+			local result = Promise.fold({}, function()
+				error("should not be called")
+			end, initialValue)
+
+			expect(Promise.is(result)).to.equal(true)
+			expect(result:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(result:expect()).to.equal(initialValue)
+		end)
+
+		it("should accept promises in the list", function()
+			local resolve
+
+			local sum = Promise.fold({ Promise.new(function(r)
+				resolve = r
+			end), 2, 3 }, function(sum, element)
+				return sum + element
+			end, 0)
+
+			resolve(1)
+
+			expect(Promise.is(sum)).to.equal(true)
+			expect(sum:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(sum:expect()).to.equal(6)
+		end)
+
+		it("should always return a promise even if the list or reducer don't use them", function()
+			local sum = Promise.fold({ 1, 2, 3 }, function(sum, element, index)
+				if index == 2 then
+					return Promise.delay(1):andThenReturn(sum + element)
+				else
+					return sum + element
+				end
+			end, 0)
+			expect(Promise.is(sum)).to.equal(true)
+			expect(sum:getStatus()).to.equal(Promise.Status.Started)
+			advanceTime(2)
+			expect(sum:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(sum:expect()).to.equal(6)
+		end)
+
+		it("should return the first rejected promise", function()
+			local errorMessage = "foo"
+			local sum = Promise.fold({ 1, 2, 3 }, function(sum, element, index)
+				if index == 2 then
+					return Promise.reject(errorMessage)
+				else
+					return sum + element
+				end
+			end, 0)
+			expect(Promise.is(sum)).to.equal(true)
+			local status, rejection = sum:awaitStatus()
+			expect(status).to.equal(Promise.Status.Rejected)
+			expect(rejection).to.equal(errorMessage)
+		end)
+
+		it("should return the first canceled promise", function()
+			local secondPromise
+			local sum = Promise.fold({ 1, 2, 3 }, function(sum, element, index)
+				if index == 1 then
+					return sum + element
+				elseif index == 2 then
+					secondPromise = Promise.delay(1):andThenReturn(sum + element)
+					return secondPromise
+				else
+					error("this should not run if the promise is cancelled")
+				end
+			end, 0)
+			expect(Promise.is(sum)).to.equal(true)
+			expect(sum:getStatus()).to.equal(Promise.Status.Started)
+			secondPromise:cancel()
+			expect(sum:getStatus()).to.equal(Promise.Status.Cancelled)
+		end)
+	end)
+
+	describe("Promise.race", function()
+		it("should resolve with the first settled value", function()
+			local promise = Promise.race({
+				Promise.resolve(1),
+				Promise.resolve(2),
+			}):andThen(function(value)
+				expect(value).to.equal(1)
+			end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+		end)
+
+		it("should cancel other promises", function()
+			local promise = Promise.new(function() end)
+			promise:andThen(function() end)
+			local promises = {
+				promise,
+				Promise.new(function() end),
+				Promise.new(function(resolve)
+					resolve(2)
+				end),
+			}
+
+			local promise = Promise.race(promises)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(promise._values[1]).to.equal(2)
+			expect(promises[1]:getStatus()).to.equal(Promise.Status.Started)
+			expect(promises[2]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[3]:getStatus()).to.equal(Promise.Status.Resolved)
+
+			local p = Promise.new(function() end)
+			expect(Promise.race({
+				Promise.reject(),
+				Promise.resolve(),
+				p,
+			}):getStatus()).to.equal(Promise.Status.Rejected)
+			expect(p:getStatus()).to.equal(Promise.Status.Cancelled)
+		end)
+
+		it("should error if a non-array table is passed in", function()
+			local ok, err = pcall(function()
+				Promise.race(Promise.new(function() end))
+			end)
+
+			expect(ok).to.be.ok()
+			expect(err:find("Non%-promise")).to.be.ok()
+		end)
+
+		it("should cancel promises if it is cancelled", function()
+			local p = Promise.new(function() end)
+			p:andThen(function() end)
+
+			local promises = {
+				Promise.new(function() end),
+				Promise.new(function() end),
+				p,
+			}
+
+			Promise.race(promises):cancel()
+
+			expect(promises[1]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[2]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[3]:getStatus()).to.equal(Promise.Status.Started)
+		end)
+	end)
+
+	describe("Promise.promisify", function()
+		it("should wrap functions", function()
+			local function test(n)
+				return n + 1
+			end
+
+			local promisified = Promise.promisify(test)
+			local promise = promisified(1)
+			local success, result = promise:_unwrap()
+
+			expect(success).to.equal(true)
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(result).to.equal(2)
+		end)
+
+		it("should catch errors after a yield", function()
+			local bindable = Instance.new("BindableEvent")
+			local test = Promise.promisify(function()
+				bindable.Event:Wait()
+				error("errortext")
+			end)
+
+			local promise = test()
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			bindable:Fire()
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(tostring(promise._values[1]):find("errortext")).to.be.ok()
+		end)
+	end)
+
+	describe("Promise.tap", function()
+		it("should thread through values", function()
+			local first, second
+
+			Promise.resolve(1)
+				:andThen(function(v)
+					return v + 1
+				end)
+				:tap(function(v)
+					first = v
+					return v + 1
+				end)
+				:andThen(function(v)
+					second = v
+				end)
+
+			expect(first).to.equal(2)
+			expect(second).to.equal(2)
+		end)
+
+		it("should chain onto promises", function()
+			local resolveInner, finalValue
+
+			local promise = Promise.resolve(1)
+				:tap(function()
+					return Promise.new(function(resolve)
+						resolveInner = resolve
+					end)
+				end)
+				:andThen(function(v)
+					finalValue = v
+				end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			expect(finalValue).to.never.be.ok()
+
+			resolveInner(1)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(finalValue).to.equal(1)
+		end)
+	end)
+
+	describe("Promise.try", function()
+		it("should catch synchronous errors", function()
+			local errorText
+			Promise.try(function()
+				error("errortext")
+			end):catch(function(e)
+				errorText = tostring(e)
+			end)
+
+			expect(errorText:find("errortext")).to.be.ok()
+		end)
+
+		it("should reject with error objects", function()
+			local object = {}
+			local success, value = Promise.try(function()
+				error(object)
+			end):_unwrap()
+
+			expect(success).to.equal(false)
+			expect(value).to.equal(object)
+		end)
+
+		it("should catch asynchronous errors", function()
+			local bindable = Instance.new("BindableEvent")
+			local promise = Promise.try(function()
+				bindable.Event:Wait()
+				error("errortext")
+			end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			bindable:Fire()
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(tostring(promise._values[1]):find("errortext")).to.be.ok()
+		end)
+	end)
+
+	describe("Promise:andThenReturn", function()
+		it("should return the given values", function()
+			local value1, value2
+
+			Promise.resolve():andThenReturn(1, 2):andThen(function(one, two)
+				value1 = one
+				value2 = two
+			end)
+
+			expect(value1).to.equal(1)
+			expect(value2).to.equal(2)
+		end)
+	end)
+
+	describe("Promise:andThenCall", function()
+		it("should call the given function with arguments", function()
+			local value1, value2
+			Promise.resolve():andThenCall(function(a, b)
+				value1 = a
+				value2 = b
+			end, 3, 4)
+
+			expect(value1).to.equal(3)
+			expect(value2).to.equal(4)
+		end)
+	end)
+
+	describe("Promise.some", function()
+		it("should resolve once the goal is reached", function()
+			local p = Promise.some({
+				Promise.resolve(1),
+				Promise.reject(),
+				Promise.resolve(2),
+			}, 2)
+			expect(p:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(p._values[1][1]).to.equal(1)
+			expect(p._values[1][2]).to.equal(2)
+		end)
+
+		it("should error if the goal can't be reached", function()
+			expect(Promise.some({
+				Promise.resolve(),
+				Promise.reject(),
+			}, 2):getStatus()).to.equal(Promise.Status.Rejected)
+
+			local reject
+			local p = Promise.some({
+				Promise.resolve(),
+				Promise.new(function(_, r)
+					reject = r
+				end),
+			}, 2)
+
+			expect(p:getStatus()).to.equal(Promise.Status.Started)
+			reject("foo")
+			expect(p:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(p._values[1]).to.equal("foo")
+		end)
+
+		it("should cancel pending Promises once the goal is reached", function()
+			local resolve
+			local pending1 = Promise.new(function() end)
+			local pending2 = Promise.new(function(r)
+				resolve = r
+			end)
+
+			local some = Promise.some({
+				pending1,
+				pending2,
+				Promise.resolve(),
+			}, 2)
+
+			expect(some:getStatus()).to.equal(Promise.Status.Started)
+			expect(pending1:getStatus()).to.equal(Promise.Status.Started)
+			expect(pending2:getStatus()).to.equal(Promise.Status.Started)
+
+			resolve()
+
+			expect(some:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(pending1:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(pending2:getStatus()).to.equal(Promise.Status.Resolved)
+		end)
+
+		it("should error if passed a non-number", function()
+			expect(function()
+				Promise.some({}, "non-number")
+			end).to.throw()
+		end)
+
+		it("should return an empty array if amount is 0", function()
+			local p = Promise.some({
+				Promise.resolve(2),
+			}, 0)
+
+			expect(p:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(#p._values[1]).to.equal(0)
+		end)
+
+		it("should not return extra values", function()
+			local p = Promise.some({
+				Promise.resolve(1),
+				Promise.resolve(2),
+				Promise.resolve(3),
+				Promise.resolve(4),
+			}, 2)
+
+			expect(p:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(#p._values[1]).to.equal(2)
+			expect(p._values[1][1]).to.equal(1)
+			expect(p._values[1][2]).to.equal(2)
+		end)
+
+		it("should cancel promises if it is cancelled", function()
+			local p = Promise.new(function() end)
+			p:andThen(function() end)
+
+			local promises = {
+				Promise.new(function() end),
+				Promise.new(function() end),
+				p,
+			}
+
+			Promise.some(promises, 3):cancel()
+
+			expect(promises[1]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[2]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[3]:getStatus()).to.equal(Promise.Status.Started)
+		end)
+
+		describe("Promise.any", function()
+			it("should return the value directly", function()
+				local p = Promise.any({
+					Promise.reject(),
+					Promise.reject(),
+					Promise.resolve(1),
+				})
+
+				expect(p:getStatus()).to.equal(Promise.Status.Resolved)
+				expect(p._values[1]).to.equal(1)
+			end)
+
+			it("should error if all are rejected", function()
+				expect(Promise.any({
+					Promise.reject(),
+					Promise.reject(),
+					Promise.reject(),
+				}):getStatus()).to.equal(Promise.Status.Rejected)
+			end)
+		end)
+	end)
+
+	describe("Promise.allSettled", function()
+		it("should resolve with an array of PromiseStatuses", function()
+			local reject
+			local p = Promise.allSettled({
+				Promise.resolve(),
+				Promise.reject(),
+				Promise.resolve(),
+				Promise.new(function(_, r)
+					reject = r
+				end),
+			})
+
+			expect(p:getStatus()).to.equal(Promise.Status.Started)
+			reject()
+			expect(p:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(p._values[1][1]).to.equal(Promise.Status.Resolved)
+			expect(p._values[1][2]).to.equal(Promise.Status.Rejected)
+			expect(p._values[1][3]).to.equal(Promise.Status.Resolved)
+			expect(p._values[1][4]).to.equal(Promise.Status.Rejected)
+		end)
+
+		it("should cancel promises if it is cancelled", function()
+			local p = Promise.new(function() end)
+			p:andThen(function() end)
+
+			local promises = {
+				Promise.new(function() end),
+				Promise.new(function() end),
+				p,
+			}
+
+			Promise.allSettled(promises):cancel()
+
+			expect(promises[1]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[2]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[3]:getStatus()).to.equal(Promise.Status.Started)
+		end)
+	end)
+
+	describe("Promise:await", function()
+		it("should return the correct values", function()
+			local promise = Promise.resolve(5, 6, nil, 7)
+
+			local a, b, c, d, e = promise:await()
+
+			expect(a).to.equal(true)
+			expect(b).to.equal(5)
+			expect(c).to.equal(6)
+			expect(d).to.equal(nil)
+			expect(e).to.equal(7)
+		end)
+
+		it("should work if yielding is needed", function()
+			local ran = false
+			task.spawn(function()
+				local _, actualTime = Promise.delay(1):await()
+				expect(type(actualTime)).to.equal("number")
+				ran = true
+			end)
+
+			advanceTime(2)
+			expect(ran).to.equal(true)
+		end)
+	end)
+
+	describe("Promise:expect", function()
+		it("should throw the correct values", function()
+			local rejectionValue = {}
+			local promise = Promise.reject(rejectionValue)
+
+			local success, value = pcall(function()
+				promise:expect()
+			end)
+
+			expect(success).to.equal(false)
+			expect(value).to.equal(rejectionValue)
+		end)
+	end)
+
+	describe("Promise:now", function()
+		it("should resolve if the Promise is resolved", function()
+			local success, value = Promise.resolve("foo"):now():_unwrap()
+
+			expect(success).to.equal(true)
+			expect(value).to.equal("foo")
+		end)
+
+		it("should reject if the Promise is not resolved", function()
+			local success, value = Promise.new(function() end):now():_unwrap()
+
+			expect(success).to.equal(false)
+			expect(Promise.Error.isKind(value, "NotResolvedInTime")).to.equal(true)
+		end)
+
+		it("should reject with a custom rejection value", function()
+			local success, value = Promise.new(function() end):now("foo"):_unwrap()
+
+			expect(success).to.equal(false)
+			expect(value).to.equal("foo")
+		end)
+	end)
+
+	describe("Promise.each", function()
+		it("should iterate", function()
+			local ok, result = Promise.each({
+				"foo",
+				"bar",
+				"baz",
+				"qux",
+			}, function(...)
+				return { ... }
+			end):_unwrap()
+
+			expect(ok).to.equal(true)
+			expect(result[1][1]).to.equal("foo")
+			expect(result[1][2]).to.equal(1)
+			expect(result[2][1]).to.equal("bar")
+			expect(result[2][2]).to.equal(2)
+			expect(result[3][1]).to.equal("baz")
+			expect(result[3][2]).to.equal(3)
+			expect(result[4][1]).to.equal("qux")
+			expect(result[4][2]).to.equal(4)
+		end)
+
+		it("should iterate serially", function()
+			local resolves = {}
+			local callCounts = {}
+
+			local promise = Promise.each({
+				"foo",
+				"bar",
+				"baz",
+			}, function(value, index)
+				callCounts[index] = (callCounts[index] or 0) + 1
+
+				return Promise.new(function(resolve)
+					table.insert(resolves, function()
+						resolve(value:upper())
+					end)
+				end)
+			end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			expect(#resolves).to.equal(1)
+			expect(callCounts[1]).to.equal(1)
+			expect(callCounts[2]).to.never.be.ok()
+
+			table.remove(resolves, 1)()
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			expect(#resolves).to.equal(1)
+			expect(callCounts[1]).to.equal(1)
+			expect(callCounts[2]).to.equal(1)
+			expect(callCounts[3]).to.never.be.ok()
+
+			table.remove(resolves, 1)()
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			expect(callCounts[1]).to.equal(1)
+			expect(callCounts[2]).to.equal(1)
+			expect(callCounts[3]).to.equal(1)
+
+			table.remove(resolves, 1)()
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(type(promise._values[1])).to.equal("table")
+			expect(type(promise._values[2])).to.equal("nil")
+
+			local result = promise._values[1]
+
+			expect(result[1]).to.equal("FOO")
+			expect(result[2]).to.equal("BAR")
+			expect(result[3]).to.equal("BAZ")
+		end)
+
+		it("should reject with the value if the predicate promise rejects", function()
+			local promise = Promise.each({ 1, 2, 3 }, function()
+				return Promise.reject("foobar")
+			end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(promise._values[1]).to.equal("foobar")
+		end)
+
+		it("should allow Promises to be in the list and wait when it gets to them", function()
+			local innerResolve
+			local innerPromise = Promise.new(function(resolve)
+				innerResolve = resolve
+			end)
+
+			local promise = Promise.each({
+				innerPromise,
+			}, function(value)
+				return value * 2
+			end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+
+			innerResolve(2)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(promise._values[1][1]).to.equal(4)
+		end)
+
+		it("should reject with the value if a Promise from the list rejects", function()
+			local called = false
+			local promise = Promise.each({ 1, 2, Promise.reject("foobar") }, function(value)
+				called = true
+				return "never"
+			end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(promise._values[1]).to.equal("foobar")
+			expect(called).to.equal(false)
+		end)
+
+		it("should reject immediately if there's a cancelled Promise in the list initially", function()
+			local cancelled = Promise.new(function() end)
+			cancelled:cancel()
+
+			local called = false
+			local promise = Promise.each({ 1, 2, cancelled }, function()
+				called = true
+			end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(called).to.equal(false)
+			expect(promise._values[1].kind).to.equal(Promise.Error.Kind.AlreadyCancelled)
+		end)
+
+		it("should stop iteration if Promise.each is cancelled", function()
+			local callCounts = {}
+
+			local promise = Promise.each({
+				"foo",
+				"bar",
+				"baz",
+			}, function(value, index)
+				callCounts[index] = (callCounts[index] or 0) + 1
+
+				return Promise.new(function() end)
+			end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			expect(callCounts[1]).to.equal(1)
+			expect(callCounts[2]).to.never.be.ok()
+
+			promise:cancel()
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(callCounts[1]).to.equal(1)
+			expect(callCounts[2]).to.never.be.ok()
+		end)
+
+		it("should cancel the Promise returned from the predicate if Promise.each is cancelled", function()
+			local innerPromise
+
+			local promise = Promise.each({
+				"foo",
+				"bar",
+				"baz",
+			}, function(value, index)
+				innerPromise = Promise.new(function() end)
+				return innerPromise
+			end)
+
+			promise:cancel()
+
+			expect(innerPromise:getStatus()).to.equal(Promise.Status.Cancelled)
+		end)
+
+		it("should cancel Promises in the list if Promise.each is cancelled", function()
+			local innerPromise = Promise.new(function() end)
+
+			local promise = Promise.each({ innerPromise }, function() end)
+
+			promise:cancel()
+
+			expect(innerPromise:getStatus()).to.equal(Promise.Status.Cancelled)
+		end)
+	end)
+
+	describe("Promise.retry", function()
+		it("should retry N times", function()
+			local counter = 0
+
+			local promise = Promise.retry(function(parameter)
+				expect(parameter).to.equal("foo")
+
+				counter = counter + 1
+
+				if counter == 5 then
+					return Promise.resolve("ok")
+				end
+
+				return Promise.reject("fail")
+			end, 5, "foo")
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(promise._values[1]).to.equal("ok")
+		end)
+
+		it("should reject if threshold is exceeded", function()
+			local promise = Promise.retry(function()
+				return Promise.reject("fail")
+			end, 5)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(promise._values[1]).to.equal("fail")
+		end)
+	end)
+
+	describe("Promise.retryWithDelay", function()
+		it("should retry after a delay", function()
+			local counter = 0
+
+			local promise = Promise.retryWithDelay(function(parameter)
+				expect(parameter).to.equal("foo")
+
+				counter = counter + 1
+
+				if counter == 3 then
+					return Promise.resolve("ok")
+				end
+
+				return Promise.reject("fail")
+			end, 3, 10, "foo")
+
+			expect(counter).to.equal(1)
+
+			advanceTime(11)
+
+			expect(counter).to.equal(2)
+
+			advanceTime(11)
+
+			expect(counter).to.equal(3)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(promise._values[1]).to.equal("ok")
+		end)
+	end)
+
+	describe("Promise.fromEvent", function()
+		it("should convert a Promise into an event", function()
+			local event = Instance.new("BindableEvent")
+
+			local promise = Promise.fromEvent(event.Event)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+
+			event:Fire("foo")
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(promise._values[1]).to.equal("foo")
+		end)
+
+		it("should convert a Promise into an event with the predicate", function()
+			local event = Instance.new("BindableEvent")
+
+			local promise = Promise.fromEvent(event.Event, function(param)
+				return param == "foo"
+			end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+
+			event:Fire("bar")
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+
+			event:Fire("foo")
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(promise._values[1]).to.equal("foo")
+		end)
+	end)
+
+	describe("Promise.is", function()
+		it("should work with current version", function()
+			local promise = Promise.resolve(1)
+
+			expect(Promise.is(promise)).to.equal(true)
+		end)
+
+		it("should work with any object with an andThen", function()
+			local obj = {
+				andThen = function()
+					return 1
+				end,
+			}
+
+			expect(Promise.is(obj)).to.equal(true)
+		end)
+
+		it("should work with older promises", function()
+			local OldPromise = {}
+			OldPromise.prototype = {}
+			OldPromise.__index = OldPromise.prototype
+
+			function OldPromise.prototype:andThen() end
+
+			local oldPromise = setmetatable({}, OldPromise)
+
+			expect(Promise.is(oldPromise)).to.equal(true)
+		end)
+	end)
+end
+]]></string>
+              </Properties>
+            </Item>
+          </Item>
+        </Item>
+      </Item>
+    </Item>
+  </Item>
+</roblox>
