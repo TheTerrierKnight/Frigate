@@ -6,12 +6,13 @@
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local Root = script
 local FrigatePackages = Root.FrigatePackages
 
 -- Set up a Container for storing generated objects in.
-if ReplicatedStorage:FindFirstChild("__FRIGATE__") == nil then
+if ReplicatedStorage:FindFirstChild("__FRIGATE__") == nil and RunService:IsServer() then
 	local StoreFolder = Instance.new("Folder")
 	StoreFolder.Name = "__FRIGATE__"
 	StoreFolder.Parent = ReplicatedStorage
