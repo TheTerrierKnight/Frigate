@@ -2,6 +2,11 @@
 
 Network Processing/API Library for Roblox. Provides many utilites for creating/managing game network objects and also helps with parsing external 3rd-party API's.
 
+Some features include:
+
+- NeoShift/Technified API Parsing
+- Network Object Management (Remotes/Functions etc.)
+
 > [!WARNING]
 > Frigate is heavily WIP. Expect some bugs and or instabilites when using Frigate. Some Documentation may also be unfinished/not implemented yet!
 

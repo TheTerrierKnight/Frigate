@@ -5,8 +5,17 @@
 	You should place the package folder in a replicated container that both the client/server can access. ReplicatedStorage is the recommended place for Frigate.
 ]]
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
 local Root = script
 local FrigatePackages = Root.FrigatePackages
+
+-- Set up a Container for storing generated objects in.
+if ReplicatedStorage:FindFirstChild("__FRIGATE__") == nil then
+	local StoreFolder = Instance.new("Folder")
+	StoreFolder.Name = "__FRIGATE__"
+	StoreFolder.Parent = ReplicatedStorage
+end
 
 -- Return the library methods/packages.
 return {

@@ -7,8 +7,9 @@ local PerformanceTracking = {}
 
 function PerformanceTracking.ApplyCallTag(tag: string, func: (...any) -> ()): ()
 	debug.profilebegin(tag)
-	func()
+	local capture = table.pack(func())
 	debug.profileend()
+	return table.unpack(capture, 1, #capture)
 end
 
 return PerformanceTracking

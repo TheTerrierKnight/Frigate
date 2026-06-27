@@ -15,13 +15,13 @@ local InternalFlags = require(InternalPackages.InternalFlags)
 local Logger = require(Root.Utilites.Logger)
 local Promise = require(Packages.promise)
 
-local _NETWORK_FOLDER = ReplicatedStorage:WaitForChild("_FRIGATE_NET", 2) or nil
+local _NETWORK_FOLDER = ReplicatedStorage:FindFirstChild("__FRIGATE__"):WaitForChild("_FRIGATE_NET", 2) or nil
 local _LOGGER_PREFIX = "NET"
 
 if _NETWORK_FOLDER == nil and RunService:IsServer() then
 	local Folder = Instance.new("Folder")
 	Folder.Name = "_FRIGATE_NET"
-	Folder.Parent = ReplicatedStorage
+	Folder.Parent = ReplicatedStorage:FindFirstChild("__FRIGATE__")
 	_NETWORK_FOLDER = Folder
 end
 
@@ -234,6 +234,64 @@ function net.BindReceiveAsync(RemoteObject: RemoteFunction | RemoteEvent | Unrel
 		end
 		resolve("")
 	end)
+end
+
+--[[
+	Invokes the specified RemoteObject on the server to a client with the provided arguments/target player. This method is server-only.
+]]
+function net.Call(RemoteObject: RemoteFunction | RemoteEvent | UnreliableRemoteEvent, player: Player, ...: any)
+	if not RunService:IsServer() then
+		Logger.LogToConsole({
+			prefix = _LOGGER_PREFIX,
+			message = "Call must be called by the server.",
+			mode = Enum.MessageType.MessageError,
+		})
+		return
+	end
+
+	if RemoteObject:GetAttribute("_FRIGATE_GEN") == nil then
+		Logger.LogToConsole({
+			prefix = _LOGGER_PREFIX,
+			message = "RemoteObject was not created by Frigate and cannot be safely called.",
+			mode = Enum.MessageType.MessageError,
+		})
+		return
+	end
+
+	if RemoteObject:IsA("RemoteEvent") or RemoteObject:IsA("UnreliableRemoteEvent") then
+		RemoteObject:FireClient(player, ...)
+	elseif RemoteObject:IsA("RemoteFunction") then
+		return RemoteObject:InvokeClient(player, ...)
+	end
+end
+
+--[[
+	Invokes the specified RemoteObject on the client to the server with the provided arguments/target player. This method is client-only.
+]]
+function net.Request(RemoteObject: RemoteFunction | RemoteEvent | UnreliableRemoteEvent, ...: any)
+	if not RunService:IsClient() then
+		Logger.LogToConsole({
+			prefix = _LOGGER_PREFIX,
+			message = "Request must be called by the client.",
+			mode = Enum.MessageType.MessageError,
+		})
+		return
+	end
+
+	if RemoteObject:GetAttribute("_FRIGATE_GEN") == nil then
+		Logger.LogToConsole({
+			prefix = _LOGGER_PREFIX,
+			message = "RemoteObject was not created by Frigate and cannot be safely called.",
+			mode = Enum.MessageType.MessageError,
+		})
+		return
+	end
+
+	if RemoteObject:IsA("RemoteEvent") or RemoteObject:IsA("UnreliableRemoteEvent") then
+		RemoteObject:FireServer(...)
+	elseif RemoteObject:IsA("RemoteFunction") then
+		return RemoteObject:InvokeServer(...)
+	end
 end
 
 return net
